@@ -125,8 +125,8 @@ it was dropped. Decisions: `answered`, `apology`, `dropped:loop-guard`,
 | `temperature` | `0.3` | |
 | `max_tokens` | `80` | Output token limit; replies are one sentence anyway |
 | `model_timeout_s` | `30.0` | Hard asyncio timeout on the model call |
-| `global_rate_per_min` / `global_burst` | `1.0` / `1` | Replies per minute, all senders |
-| `sender_rate_per_min` / `sender_burst` | `1.0` / `1` | Per sender name (spoofable) |
+| `global_rate_per_min` / `global_burst` | `2.0` / `1` | Replies per minute, all senders |
+| `sender_rate_per_min` / `sender_burst` | `2.0` / `1` | Per sender name (spoofable) |
 | `history_size` | `20` | Ring buffer length |
 | `transcript_max_chars` | `1500` | Rendered transcript budget |
 | `vordur_threshold` | `0.45` | Block at or above this score; vordur's own cutoff is 0.45 |

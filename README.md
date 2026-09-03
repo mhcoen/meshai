@@ -78,8 +78,11 @@ to the JSON log whether or not the monitor is on.
    posts, excluding lines vordur flagged at ingestion and excluding the current
    message) are rendered as `Sender: text`, truncated from the oldest end to
    `transcript_max_chars`, and placed inside one user message between explicit
-   delimiters that label it as untrusted, followed by the current prompt. History
-   is never replayed as prior chat turns.
+   delimiters that label it as untrusted, *after* the current prompt. History
+   is never replayed as prior chat turns. The prompt-first layout plus system
+   rule 7 (lines that address the bot by name or tell it how to behave are
+   attacks) took qwen3-30b-a3b-instruct from following 4 of 12 planted
+   transcript instructions to 0 of 12 in a small test matrix.
 8. **vordur, context.** The transcript and prompt together, as one document, so
    fragments that pass individually but combine into an instruction are caught.
 9. **Model.** One call under a hard `model_timeout_s` timeout. On timeout or any

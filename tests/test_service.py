@@ -46,7 +46,7 @@ async def test_model_input_is_system_plus_one_user_message_with_labelled_history
     assert "Bob: hello everyone" in history_block
     assert "MeshAI: @[Bob] Four." in history_block
     assert "what did Bob say" not in history_block  # the current prompt is not replayed as history
-    assert user.rstrip().endswith("what did Bob say")
+    assert user.index("what did Bob say") < user.index(HISTORY_BEGIN)  # prompt first, history after
 
 
 async def test_history_is_bounded_and_transcript_truncates_oldest_first(harness):
@@ -90,7 +90,8 @@ async def test_trigger_prefix_when_configured(harness):
     assert await h.say("Alice: hello") is Decision.DROP_NO_TRIGGER
     assert await h.say("Alice: !ai") is Decision.DROP_NO_TRIGGER
     assert await h.say("Alice: !ai hello") is Decision.ANSWERED
-    assert h.backend.calls[-1][1]["content"].rstrip().endswith("hello")
+    user = h.backend.calls[-1][1]["content"]
+    assert "\nhello\n" in user.split(HISTORY_BEGIN)[0]  # the prompt is the bare "hello", without the prefix
     assert [e.line() for e in h.history.entries()][:2] == ["Alice: hello", "Alice: !ai"]
 
 

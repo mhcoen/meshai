@@ -41,7 +41,7 @@ name, so other users just add `#name` in their app). The bot refuses to start if
 the configured channel index is empty on the radio.
 
 Model side: an Ollama server on the same machine with the configured model
-pulled (`ollama pull qwen3:30b-a3b`), or any OpenAI-compatible `/chat/completions`
+pulled (`ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M`), or any OpenAI-compatible `/chat/completions`
 endpoint with `backend = "openai"`.
 
 ## Running
@@ -114,7 +114,7 @@ it was dropped. Decisions: `answered`, `apology`, `dropped:loop-guard`,
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
 | `persona` | `""` | Optional sentence prepended to the fixed system prompt |
 | `backend` | `ollama` | `ollama` or `openai` |
-| `model` | `qwen3:30b-a3b` | Model name for the chosen backend |
+| `model` | `qwen3:30b-a3b-instruct-2507-q4_K_M` | Model name for the chosen backend |
 | `ollama_host` | `http://127.0.0.1:11434` | |
 | `ollama_think` | `off` | `off`, `on`, or `omit` for models that reject the flag |
 | `ollama_keep_alive` | `30m` | Keeps the model resident between replies |

@@ -43,7 +43,7 @@ class Config:
 
     # [model]
     backend: str = "ollama"
-    model: str = "qwen3:30b-a3b"
+    model: str = "qwen3:30b-a3b-instruct-2507-q4_K_M"
     ollama_host: str = "http://127.0.0.1:11434"
     ollama_think: str = "off"
     ollama_keep_alive: str = "30m"

@@ -15,7 +15,7 @@ def test_defaults_match_the_agreed_setup():
     assert cfg.bot_name == "MeshAI"
     assert cfg.trigger_prefix == ""
     assert cfg.backend == "ollama"
-    assert cfg.model == "qwen3:30b-a3b"
+    assert cfg.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert cfg.ollama_think == "off"
     assert cfg.reply_max_chars == 120
     assert cfg.global_rate_per_min == 1.0
@@ -98,7 +98,7 @@ def test_backend_selection_ollama(monkeypatch):
     backend = make_backend(cfg, env={})
     assert isinstance(backend, OllamaBackend)
     assert backend.name == "ollama"
-    assert backend.model == "qwen3:30b-a3b"
+    assert backend.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert backend._client.kwargs == {"host": "http://box:11434"}
     assert backend._think is False
 

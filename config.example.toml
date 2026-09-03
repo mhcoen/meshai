@@ -18,7 +18,7 @@ persona = ""                      # optional sentence prepended to the fixed sys
 
 [model]
 backend = "ollama"                # "ollama" or "openai" (any OpenAI-compatible /chat/completions)
-model = "qwen3:30b-a3b"
+model = "qwen3:30b-a3b-instruct-2507-q4_K_M"
 ollama_host = "http://127.0.0.1:11434"
 ollama_think = "off"              # "off" | "on" | "omit" (omit for models that reject the think flag)
 ollama_keep_alive = "30m"         # keep the model resident between one-per-minute replies

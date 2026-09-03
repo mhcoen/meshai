@@ -1,0 +1,45 @@
+# MeshAI configuration. Copy to config.toml and edit.
+# Every key can be overridden by an environment variable MESHAI_<KEY_UPPERCASE>,
+# e.g. MESHAI_PORT=/dev/cu.usbserial-0001 or MESHAI_MODEL=qwen2.5:14b.
+# The OpenAI-compatible API key is env-only: MESHAI_OPENAI_API_KEY. It is never
+# read from this file and never logged.
+
+[radio]
+port = "/dev/cu.usbserial-0001"   # required; the MeshCore USB companion
+channel_idx = 1                   # must exist on the radio; the bot refuses to start otherwise
+
+[bot]
+bot_name = "MeshAI"               # MUST equal the radio's node name (loop guard depends on it)
+trigger_prefix = ""               # "" answers every message on the channel; "!ai " for shared channels
+reply_max_chars = 120             # total, including the "@[sender] " prefix
+prompt_max_chars = 140            # longer prompts are dropped
+apology = "Sorry, I couldn't answer that one."
+persona = ""                      # optional sentence prepended to the fixed system prompt
+
+[model]
+backend = "ollama"                # "ollama" or "openai" (any OpenAI-compatible /chat/completions)
+model = "qwen3:30b-a3b"
+ollama_host = "http://127.0.0.1:11434"
+ollama_think = "off"              # "off" | "on" | "omit" (omit for models that reject the think flag)
+ollama_keep_alive = "30m"         # keep the model resident between one-per-minute replies
+openai_base_url = "http://127.0.0.1:1234/v1"
+temperature = 0.3
+max_tokens = 80
+model_timeout_s = 30.0            # hard asyncio timeout; on expiry the apology is posted
+
+[limits]
+global_rate_per_min = 1.0         # replies per minute across all senders
+global_burst = 1
+sender_rate_per_min = 1.0         # per sender name (spoofable; the global limit is the real ceiling)
+sender_burst = 1
+
+[history]
+history_size = 20                 # ring buffer of recent channel lines, including the bot's own
+transcript_max_chars = 1500       # rendered transcript budget; truncated from the oldest end
+
+[vordur]
+vordur_threshold = 0.45           # block when vordur's score >= this (vordur's own cutoff is 0.45)
+vordur_sanitize = false           # run vordur's sanitizer on the prompt before detection
+
+[logging]
+log_file = ""                     # "" = JSON lines to stderr; otherwise appended to this path

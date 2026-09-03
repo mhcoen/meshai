@@ -1,0 +1,128 @@
+"""Terminal monitor (Textual), running in the same process and event loop as the bot."""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal
+from textual.widgets import Footer, Header, RichLog, Static
+
+from bot.config import Config
+from bot.ratelimit import RateLimiter
+from bot.service import Stats
+
+
+class MeshAIApp(App[None]):
+    TITLE = "MeshAI"
+    CSS = """
+    Horizontal#top { height: 9; }
+    #status, #limits { width: 1fr; border: round $primary; padding: 0 1; }
+    #log { border: round $secondary; height: 1fr; }
+    """
+    BINDINGS = [
+        Binding("q", "quit", "Quit"),
+        Binding("ctrl+c", "quit", "Quit", show=False),
+    ]
+
+    def __init__(
+        self,
+        cfg: Config,
+        stats: Stats,
+        limiter: RateLimiter,
+        subscribe_log: Callable[[Callable[[dict[str, Any]], None]], None],
+        run_service: Callable[[], Awaitable[None]],
+        stop_service: Callable[[], Awaitable[None]],
+    ):
+        super().__init__()
+        self._cfg = cfg
+        self._stats = stats
+        self._limiter = limiter
+        self._subscribe_log = subscribe_log
+        self._run_service = run_service
+        self._stop_service = stop_service
+        self._task: asyncio.Task[None] | None = None
+        self.exit_error: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="top"):
+            yield Static(id="status")
+            yield Static(id="limits")
+        yield RichLog(id="log", highlight=False, markup=False, wrap=True, max_lines=2000)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._subscribe_log(self._on_record)
+        self._task = asyncio.create_task(self._run())
+        self.set_interval(1.0, self._refresh_panels)
+        self._refresh_panels()
+
+    async def _run(self) -> None:
+        try:
+            await self._run_service()
+        except Exception as exc:  # noqa: BLE001
+            self.exit_error = f"{type(exc).__name__}: {exc}"
+            self.exit()
+
+    async def action_quit(self) -> None:
+        await self._stop_service()
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self.exit()
+
+    # ------------------------------------------------------------------ rendering
+
+    def _refresh_panels(self) -> None:
+        s = self._stats
+        cfg = self._cfg
+        latency = f"{s.last_latency_ms:.0f} ms" if s.last_latency_ms is not None else "n/a"
+        status = (
+            f"[b]Radio[/b]   {'CONNECTED' if s.connected else 'DISCONNECTED'}  {cfg.port}\n"
+            f"[b]Channel[/b] {s.channel_name or '?'} (idx {cfg.channel_idx})\n"
+            f"[b]Model[/b]   {cfg.backend}:{cfg.model}   last latency {latency}\n"
+            f"[b]Counts[/b]  in {s.received}  replies {s.replies_sent}  apologies {s.apologies_sent}\n"
+            f"         vordur-blocked {s.vordur_blocks}  rate-limited {s.rate_limited}  "
+            f"send-err {s.send_errors}  model-err {s.model_errors}"
+        )
+        snap = self._limiter.snapshot()
+        senders = "\n".join(
+            f"  {name[:20]:<20} {tokens:.2f}/{snap['sender_capacity']}" for name, tokens in snap["senders"].items()
+        ) or "  (none yet)"
+        limits = (
+            f"[b]Rate limits[/b]\n"
+            f"global  {snap['global_tokens']:.2f}/{snap['global_capacity']} tokens  "
+            f"({cfg.global_rate_per_min:g}/min)\n"
+            f"per-sender ({cfg.sender_rate_per_min:g}/min), recent:\n{senders}"
+        )
+        self.query_one("#status", Static).update(status)
+        self.query_one("#limits", Static).update(limits)
+
+    def _on_record(self, record: dict[str, Any]) -> None:
+        event = record.get("event")
+        ts = str(record.get("ts", ""))[11:19]
+        if event == "inbound":
+            decision = record.get("decision", "")
+            extra = ""
+            if decision == "dropped:vordur-blocked":
+                extra = f" [{record.get('point')} score={record.get('vordur_score')} {record.get('vordur_rules')}]"
+            elif decision == "dropped:rate-limited":
+                extra = f" [{record.get('reason')}]"
+            elif decision in ("answered", "apology"):
+                extra = f" -> {record.get('reply')}"
+            line = (
+                f"{ts} {record.get('sender', '?')!s:<16} hops={record.get('path_len')} "
+                f"{decision:<24} {record.get('prompt', '')!s}{extra}"
+            )
+        elif event in ("startup", "shutdown", "connected", "disconnected", "send_error", "vordur_block", "shutdown_error"):
+            details = {k: v for k, v in record.items() if k not in ("ts", "event")}
+            line = f"{ts} [{event}] {details}"
+        else:
+            return
+        try:
+            self.query_one("#log", RichLog).write(line)
+        except Exception:  # noqa: BLE001 - widget may not be mounted yet
+            pass

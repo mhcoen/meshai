@@ -84,3 +84,5 @@
 2026-09-03 20:26:18,045 httpcore.http11 DEBUG receive_response_body.complete
 2026-09-03 20:26:18,045 httpcore.http11 DEBUG response_closed.started
 2026-09-03 20:26:18,045 httpcore.http11 DEBUG response_closed.complete
+2026-09-03 20:32:53,801 httpcore.connection DEBUG close.started
+2026-09-03 20:32:53,801 httpcore.connection DEBUG close.complete

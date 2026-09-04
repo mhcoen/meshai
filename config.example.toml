@@ -23,7 +23,7 @@ ollama_host = "http://127.0.0.1:11434"
 ollama_think = "off"              # "off" | "on" | "omit" (omit for models that reject the think flag)
 ollama_keep_alive = "30m"         # keep the model resident between one-per-minute replies
 openai_base_url = "http://127.0.0.1:1234/v1"
-temperature = 0.3
+temperature = 0.6
 max_tokens = 80
 model_timeout_s = 30.0            # hard asyncio timeout; on expiry the apology is posted
 

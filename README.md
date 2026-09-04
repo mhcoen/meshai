@@ -171,7 +171,7 @@ is written; the bot keeps running.
 | `ollama_think` | `off` | `off`, `on`, or `omit` for models that reject the flag |
 | `ollama_keep_alive` | `30m` | Keeps the model resident between replies |
 | `openai_base_url` | `http://127.0.0.1:1234/v1` | Any OpenAI-compatible server |
-| `temperature` | `0.3` | |
+| `temperature` | `0.6` | |
 | `max_tokens` | `80` | Output token limit; replies are one sentence anyway |
 | `model_timeout_s` | `30.0` | Hard asyncio timeout on the model call |
 | `global_rate_per_min` / `global_burst` | `2.0` / `1` | Replies per minute, all senders |

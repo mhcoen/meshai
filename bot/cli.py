@@ -19,6 +19,7 @@ from bot.config import Config, ConfigError, load_config
 from bot.guard import InjectionGate
 from bot.history import History
 from bot.jsonlog import EventLog
+from bot.logcheck import check_log
 from bot.ratelimit import RateLimiter
 from bot.service import BotService, ChannelError
 from bot.fortune import FortuneScheduler
@@ -34,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug",
         action="store_true",
         help="also write meshcore's frame-level debug logging to <log file>.debug (or stderr when headless)",
+    )
+    parser.add_argument(
+        "--check",
+        metavar="LOG",
+        help="read a JSON log and report anything the radio heard that the bot never received, then exit",
     )
     parser.add_argument("--version", action="version", version=f"meshai {__version__}")
     return parser
@@ -204,6 +210,13 @@ async def run(cfg: Config, headless: bool, log: EventLog) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.check:
+        try:
+            print(check_log(args.check).render())
+        except FileNotFoundError:
+            print(f"error: log file not found: {args.check}", file=sys.stderr)
+            return 1
+        return 0
     try:
         cfg = load_config(args.config)
     except ConfigError as exc:

@@ -9,6 +9,16 @@ description = "MeshCore channel bot that answers messages with a local LLM, gate
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Michael H. Coen", email = "mhcoen@gmail.com" }]
+keywords = ["meshcore", "lora", "mesh", "chatbot", "llm", "ollama"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Ham Radio",
+]
 dependencies = [
   "meshcore>=2.3.9",
   "ollama>=0.6",
@@ -16,6 +26,10 @@ dependencies = [
   "textual>=1.0",
   "vordur>=2.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mhcoen/meshai"
+Issues = "https://github.com/mhcoen/meshai/issues"
 
 [project.optional-dependencies]
 dev = [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -19,7 +20,7 @@ from bot.service import Stats
 class MeshAIApp(App[None]):
     TITLE = "MeshAI"
     CSS = """
-    Horizontal#top { height: 11; }
+    Horizontal#top { height: 12; }
     #status, #limits, #util { width: 1fr; border: round $primary; padding: 0 1; }
     #log { border: round $secondary; height: 1fr; }
     """
@@ -86,6 +87,8 @@ class MeshAIApp(App[None]):
         status = (
             f"[b]Radio[/b]   {'CONNECTED' if s.connected else 'DISCONNECTED'}  {cfg.port}\n"
             f"[b]Channel[/b] {s.channel_name or '?'} (idx {cfg.channel_idx})\n"
+            f"[b]Persona[/b] {s.persona}"
+            f"{'  until ' + time.strftime('%H:%M', time.localtime(s.persona_expires_at)) if s.persona_expires_at else ''}\n"
             f"[b]Model[/b]   {cfg.backend}:{cfg.model}\n"
             f"         last latency {latency}\n"
             f"[b]Counts[/b]  in {s.received}  replies {s.replies_sent}  apologies {s.apologies_sent}\n"
@@ -139,7 +142,9 @@ class MeshAIApp(App[None]):
                 extra = f" [{record.get('point')} score={record.get('injection_score')} {record.get('injection_rules')}]"
             elif decision == "dropped:rate-limited":
                 extra = f" [{record.get('reason')}]"
-            elif decision in ("answered", "answered:too-long-fallback", "apology"):
+            elif decision == "persona-switched":
+                extra = f" -> persona {record.get('persona')}"
+            elif decision in ("answered", "answered:too-long-fallback", "answered:help", "answered:reset", "apology"):
                 extra = f" -> {record.get('reply')}"
             line = (
                 f"{ts} {record.get('sender', '?')!s:<16} hops={record.get('path_len')} "
@@ -149,7 +154,8 @@ class MeshAIApp(App[None]):
             line = f"{ts} [rate] {record.get('old')} -> {record.get('new')} at duty {record.get('duty')} ({record.get('reason')})"
         elif event in (
             "startup", "shutdown", "connected", "disconnected", "send_error", "injection_block",
-            "shutdown_error", "utilization_error", "reply_too_long",
+            "shutdown_error", "utilization_error", "reply_too_long", "persona_switch", "persona_reset",
+            "announce", "announce_failed", "persona_timer_error",
         ):
             details = {k: v for k, v in record.items() if k not in ("ts", "event")}
             line = f"{ts} [{event}] {details}"

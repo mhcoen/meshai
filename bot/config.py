@@ -12,9 +12,11 @@ from __future__ import annotations
 import os
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
+
+from bot.personas import BUILTIN_PERSONAS, HELP_COMMAND, NAME_RE, RESET_COMMAND, build_help
 
 ENV_PREFIX = "MESHAI_"
 API_KEY_ENV = "MESHAI_OPENAI_API_KEY"
@@ -45,7 +47,13 @@ class Config:
     shorten_retries: int = 2
     too_long_reply: str = "That answer will not fit in one message, ask me something narrower."
     apology: str = "Sorry, I couldn't answer that one."
-    persona: str = ""
+
+    # [personas] table: name -> persona text (built-ins when absent), plus the keys below
+    personas: dict[str, str] = field(default_factory=lambda: dict(BUILTIN_PERSONAS))
+    default_persona: str = "funny"
+    persona_timeout_min: float = 120.0
+    persona_reset_message: str = "Back to the default personality."
+    command_prefix: str = "/"
 
     # [model]
     backend: str = "ollama"
@@ -114,6 +122,28 @@ class Config:
             errors.append("reply_delay_s must not be negative")
         if self.model_timeout_s <= 0:
             errors.append("model_timeout_s must be positive")
+        if not self.personas:
+            errors.append("personas must not be empty")
+        for name, text in self.personas.items():
+            if not NAME_RE.match(name):
+                errors.append(f"persona name {name!r} must be lowercase letters, digits, underscores, at most 16 chars")
+            if name in (HELP_COMMAND, RESET_COMMAND):
+                errors.append(f"persona name {name!r} collides with a command")
+            if not isinstance(text, str) or not text.strip():
+                errors.append(f"persona {name!r} must have non-empty text")
+        if self.default_persona not in self.personas:
+            errors.append(f"default_persona {self.default_persona!r} is not in personas")
+        if self.persona_timeout_min <= 0:
+            errors.append("persona_timeout_min must be positive")
+        if not self.command_prefix or " " in self.command_prefix:
+            errors.append("command_prefix must be non-empty and contain no spaces")
+        if not self.persona_reset_message.strip():
+            errors.append("persona_reset_message must not be empty")
+        room = self.reply_max_chars - len("@[") - 20 - len("] ")  # a 20 char sender name
+        if self.reply_max_chars > 0 and len(self.help_message) > room:
+            errors.append(f"the help line is {len(self.help_message)} chars; it must fit in {room} (fewer or shorter persona names)")
+        if self.reply_max_chars > 0 and len(self.persona_reset_message) > self.reply_max_chars:
+            errors.append("persona_reset_message must fit in reply_max_chars")
         if self.max_tokens <= 0:
             errors.append("max_tokens must be positive")
         for name in ("global_rate_per_min", "sender_rate_per_min"):
@@ -136,12 +166,24 @@ class Config:
             raise ConfigError("; ".join(errors))
         return self
 
+    @property
+    def help_message(self) -> str:
+        return build_help(list(self.personas), self.persona_timeout_min, self.command_prefix)
+
+    @property
+    def default_persona_text(self) -> str:
+        return self.personas[self.default_persona]
+
 
 _FIELD_TYPES: dict[str, type] = {f.name: f.type for f in fields(Config)}  # type: ignore[misc]
 
 
 def _coerce(name: str, value: Any) -> Any:
     """Coerce a TOML or env value to the declared field type."""
+    if name == "personas":
+        if not isinstance(value, Mapping):
+            raise ConfigError("personas must be a table of name = \"text\"")
+        return {str(k): str(v) for k, v in value.items()}
     target = _FIELD_TYPES[name]
     if isinstance(target, str):  # `from __future__ import annotations` leaves strings
         target = {"str": str, "int": int, "float": float, "bool": bool}[target]
@@ -175,6 +217,9 @@ def _flatten(doc: Mapping[str, Any]) -> dict[str, Any]:
     """Merge top-level keys and one level of sections into a single flat dict."""
     flat: dict[str, Any] = {}
     for key, value in doc.items():
+        if key == "personas":
+            flat[key] = value  # a table of presets, not a section of settings
+            continue
         items = value.items() if isinstance(value, Mapping) else [(key, value)]
         for name, val in items:
             if name not in _FIELD_TYPES:
@@ -190,6 +235,8 @@ def config_from_mapping(doc: Mapping[str, Any], env: Mapping[str, str] | None = 
     values = {name: _coerce(name, val) for name, val in _flatten(doc).items()}
     env = os.environ if env is None else env
     for name in _FIELD_TYPES:
+        if name == "personas":
+            continue  # a table; no environment form
         raw = env.get(ENV_PREFIX + name.upper())
         if raw is not None:
             values[name] = _coerce(name, raw)

@@ -14,13 +14,18 @@ it cannot hear does not register; that is inherent to a node-local measurement. 
 are integer seconds, so with a 60 s window the resolution is about 1.7 percentage points.
 No level change is made until the window holds at least half of ``window_s`` of data.
 
-Policy with hysteresis:
-  duty <  duty_low                -> "full"   factor 1.0
-  duty_low <= duty < duty_high    -> "half"   factor 0.5
-  duty >= duty_high               -> "paused" factor 0.0
+Two policies run on the same level ladder, and the more restrictive one wins:
+  received duty (other people's traffic, congestion):
+    duty <  duty_low                -> "full"   factor 1.0
+    duty_low <= duty < duty_high    -> "half"   factor 0.5
+    duty >= duty_high               -> "paused" factor 0.0
+  the bot's own transmit duty against tx_duty_budget (the courtesy dial):
+    tx_duty <  budget               -> "full"
+    budget <= tx_duty < 2 * budget  -> "half"
+    tx_duty >= 2 * budget           -> "paused"
 Tightening happens as soon as a threshold is crossed. Relaxing happens one level per
-poll and only once duty has fallen below 80% of the threshold that level guards, so a
-channel hovering at a threshold does not flap.
+poll and only once the duty has fallen below 80% of the threshold that level guards,
+so a channel hovering at a threshold does not flap.
 """
 
 from __future__ import annotations
@@ -65,6 +70,7 @@ class Utilization:
     last_snr: float | None
     level: str
     factor: float
+    reason: str = ""  # "rx" when received traffic set the level, "tx" when the bot's own budget did
 
 
 def next_level(duty: float, current: str, duty_low: float, duty_high: float) -> str:
@@ -90,6 +96,7 @@ class UtilizationMonitor:
         duty_low: float,
         duty_high: float,
         clock: Callable[[], float] = time.monotonic,
+        tx_budget: float = 1.0,
     ):
         self.mc = meshcore
         self.limiter = limiter
@@ -98,6 +105,7 @@ class UtilizationMonitor:
         self.window_s = window_s
         self.duty_low = duty_low
         self.duty_high = duty_high
+        self.tx_budget = tx_budget
         self._clock = clock
         self._samples: deque[Sample] = deque()
         self.level = "full"
@@ -174,12 +182,16 @@ class UtilizationMonitor:
         tx_duty = min(1.0, max(0.0, (sample.tx_air - oldest.tx_air) / elapsed))
         ppm = ((sample.recv - oldest.recv) + (sample.sent - oldest.sent)) / elapsed * 60.0
 
+        reason = ""
         if elapsed >= self.window_s * 0.5:
-            level = next_level(duty, self.level, self.duty_low, self.duty_high)
+            rx_level = next_level(duty, self.level, self.duty_low, self.duty_high)
+            tx_level = next_level(tx_duty, self.level, self.tx_budget, 2.0 * self.tx_budget)
+            level = max(rx_level, tx_level, key=LEVELS.index)
+            reason = "tx" if LEVELS.index(tx_level) > LEVELS.index(rx_level) else "rx"
         else:
             level = self.level  # too little data to act on yet
         changed = level != self.level
-        self._set_level(level, duty)
+        self._set_level(level, duty if reason != "tx" else tx_duty, reason)
         self.current = Utilization(
             duty=duty,
             tx_duty=tx_duty,
@@ -190,11 +202,14 @@ class UtilizationMonitor:
             last_snr=sample.last_snr,
             level=level,
             factor=FACTORS[level],
+            reason=reason,
         )
         self.log.emit(
             "utilization",
             duty=round(duty, 4),
             tx_duty=round(tx_duty, 4),
+            tx_budget=self.tx_budget,
+            reason=reason,
             packets_per_min=round(ppm, 2),
             window_s=round(elapsed, 1),
             noise_floor=sample.noise_floor,
@@ -206,8 +221,8 @@ class UtilizationMonitor:
         )
         return self.current
 
-    def _set_level(self, level: str, duty: float) -> None:
+    def _set_level(self, level: str, duty: float, reason: str = "") -> None:
         if level != self.level:
-            self.log.emit("rate_level", old=self.level, new=level, duty=round(duty, 4))
+            self.log.emit("rate_level", old=self.level, new=level, duty=round(duty, 4), reason=reason)
         self.level = level
         self.limiter.set_global_factor(FACTORS[level])

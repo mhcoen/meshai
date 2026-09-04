@@ -115,14 +115,15 @@ class MeshAIApp(App[None]):
         m = self._monitor
         u = m.current
         head = (
-            f"[b]Channel utilization[/b]  level {m.level.upper()}\n"
-            f"thresholds {cfg.duty_low:.0%} half / {cfg.duty_high:.0%} pause, "
-            f"window {cfg.utilization_window_s:g}s, poll {cfg.utilization_poll_s:g}s\n"
+            f"[b]Channel utilization[/b]  level {m.level.upper()}"
+            f"{' (' + u.reason + ')' if u is not None and u.reason else ''}\n"
+            f"own tx budget {cfg.tx_duty_budget:.1%} of channel time, "
+            f"rx thresholds {cfg.duty_low:.0%} half / {cfg.duty_high:.0%} pause\n"
         )
         if u is None:
             return head + f"(warming up, polls {m.polls}, errors {m.errors})"
         return head + (
-            f"rx duty     {u.duty:.1%} over {u.window_s:.0f}s   own tx {u.tx_duty:.1%}\n"
+            f"rx duty     {u.duty:.1%} over {u.window_s:.0f}s   own tx {u.tx_duty:.1%} of {cfg.tx_duty_budget:.1%}\n"
             f"packets     {u.packets_per_min:.1f}/min\n"
             f"noise floor {u.noise_floor} dBm  rssi {u.last_rssi}  snr {u.last_snr}\n"
             f"polls {m.polls}  errors {m.errors}"
@@ -145,7 +146,7 @@ class MeshAIApp(App[None]):
                 f"{decision:<24} {record.get('prompt', '')!s}{extra}"
             )
         elif event == "rate_level":
-            line = f"{ts} [rate] {record.get('old')} -> {record.get('new')} at duty {record.get('duty')}"
+            line = f"{ts} [rate] {record.get('old')} -> {record.get('new')} at duty {record.get('duty')} ({record.get('reason')})"
         elif event in (
             "startup", "shutdown", "connected", "disconnected", "send_error", "injection_block",
             "shutdown_error", "utilization_error", "reply_too_long",

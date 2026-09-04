@@ -118,6 +118,66 @@ async def test_own_transmissions_never_throttle_the_bot():
     assert u.level == "full" and limiter.global_factor == 1.0
 
 
+def make_budget_monitor(clock, budget=0.02, window_s=20.0):
+    mc = StatsMeshCore()
+    limiter = RateLimiter(4.0, 1, 4.0, 1, clock=clock)
+    records = []
+    log = EventLog(stream=io.StringIO())
+    log.subscribe(records.append)
+    mon = UtilizationMonitor(mc, limiter, log, poll_s=10.0, window_s=window_s, duty_low=LOW, duty_high=HIGH,
+                             clock=clock, tx_budget=budget)
+    return mc, limiter, mon, records
+
+
+async def test_own_transmit_budget_halves_the_rate_when_exceeded():
+    clock = FakeClock()
+    mc, limiter, mon, records = make_budget_monitor(clock, budget=0.05)
+    await mon.sample()
+    clock.advance(20)
+    mc.tx_air = 1  # 1 s of our own airtime in 20 s = 5%: at the budget
+    u = await mon.sample()
+    assert u.tx_duty == pytest.approx(0.05)
+    assert u.level == "half" and u.reason == "tx"
+    assert limiter.global_factor == 0.5
+    assert [r for r in records if r["event"] == "rate_level"][-1]["reason"] == "tx"
+
+
+async def test_own_transmit_at_twice_the_budget_pauses():
+    clock = FakeClock()
+    mc, limiter, mon, records = make_budget_monitor(clock, budget=0.05)
+    await mon.sample()
+    clock.advance(20)
+    mc.tx_air = 2  # 10% = 2 x budget
+    u = await mon.sample()
+    assert u.level == "paused" and u.reason == "tx"
+    assert limiter.global_factor == 0.0
+
+
+async def test_the_more_restrictive_policy_wins():
+    clock = FakeClock()
+    mc, limiter, mon, records = make_budget_monitor(clock, budget=0.05)
+    await mon.sample()
+    clock.advance(20)
+    mc.rx_air = 4  # 20% received: paused by rx
+    mc.tx_air = 1  # 5% own: half by tx
+    u = await mon.sample()
+    assert u.level == "paused" and u.reason == "rx"
+
+
+async def test_budget_relaxes_with_the_same_hysteresis():
+    clock = FakeClock()
+    mc, limiter, mon, records = make_budget_monitor(clock, budget=0.05, window_s=10.0)
+    await mon.sample()
+    clock.advance(10)
+    mc.tx_air = 1  # 10% -> paused
+    assert (await mon.sample()).level == "paused"
+    clock.advance(10)  # window slides past the burst
+    assert (await mon.sample()).level == "half"
+    clock.advance(10)
+    assert (await mon.sample()).level == "full"
+    assert limiter.global_factor == 1.0
+
+
 async def test_no_action_until_half_the_window_is_in_hand():
     clock = FakeClock()
     mc, limiter, mon, records = make_monitor(clock, window_s=60.0)  # acts only from 30 s of data

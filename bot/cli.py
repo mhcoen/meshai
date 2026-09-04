@@ -55,6 +55,7 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
             window_s=cfg.utilization_window_s,
             duty_low=cfg.duty_low,
             duty_high=cfg.duty_high,
+            tx_budget=cfg.tx_duty_budget,
         )
     return BotService(
         cfg=cfg,

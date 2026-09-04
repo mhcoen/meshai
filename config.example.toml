@@ -13,7 +13,7 @@ bot_name = "MeshAI"               # MUST equal the radio's node name (loop guard
 trigger_prefix = ""               # "" answers every message on the channel; "!ai " for shared channels
 reply_max_chars = 150             # total, including "@[sender] "; the radio allows 160 minus "MeshAI: "
 prompt_max_chars = 160            # longer prompts are dropped (the radio delivers at most 160 anyway)
-reply_delay_s = 6.0               # hold the reply this long after the question so it misses the repeaters' flood
+reply_delay_s = 8.0               # hold the reply this long (jittered) after the question so it misses the repeaters
 shorten_retries = 2               # times a too-long reply goes back to the model with the exact limit
 too_long_reply = "That answer will not fit in one message, ask me something narrower."   # sent if it still will not fit
 apology = "Sorry, I couldn't answer that one."
@@ -31,9 +31,9 @@ max_tokens = 80
 model_timeout_s = 30.0            # hard asyncio timeout; on expiry the apology is posted
 
 [limits]
-global_rate_per_min = 3.0         # replies per minute across all senders (3 = one every 20 s)
+global_rate_per_min = 4.0         # burst floor: never closer than 15 s; tx_duty_budget governs the average
 global_burst = 1
-sender_rate_per_min = 3.0         # per sender name (spoofable; the global limit is the real ceiling)
+sender_rate_per_min = 4.0         # per sender name (spoofable; the global limit is the real ceiling)
 sender_burst = 1
 
 [adaptive]
@@ -42,6 +42,7 @@ utilization_poll_s = 10.0         # how often to read the radio's airtime/packet
 utilization_window_s = 60.0       # duty cycle is computed over this window
 duty_low = 0.05                   # at/above this duty cycle the global rate is halved
 duty_high = 0.15                  # at/above this it is paused; relaxes one step per poll with hysteresis
+tx_duty_budget = 0.02             # THE DIAL: share of channel time the bot may use for its own transmissions
 
 [history]
 history_size = 20                 # ring buffer of recent channel lines, including the bot's own

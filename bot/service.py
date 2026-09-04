@@ -366,7 +366,7 @@ class BotService:
         target = self.cfg.reply_delay_s
         if target <= 0:
             return 0.0
-        target *= random.uniform(0.8, 1.25)
+        target *= random.uniform(0.8, 1.4)
         remaining = target - (self._clock() - received_at)
         if remaining > 0:
             await asyncio.sleep(remaining)

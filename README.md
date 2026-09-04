@@ -16,9 +16,10 @@ history on disk.
 
 A live instance runs as MeshAI on the `#ai` channel of the MeshCore mesh in
 southern Wisconsin, centered on Madison. If you are on that mesh, add `#ai`
-in your MeshCore app and say something. It answers one message every 20
-seconds at most and backs off when the channel is busy, so a silence usually
-means the limit rather than a fault.
+in your MeshCore app and say something. It keeps its own transmissions to
+about 2 percent of the channel's time, never answers closer than 15 seconds
+apart, and backs off when the channel is busy, so a silence usually means
+the limit rather than a fault.
 
 ## Screenshots
 
@@ -44,16 +45,19 @@ channel utilisation, and every message with the bot's decision on it:
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
 - Any personality you like: the `persona` line in `config.toml` is prepended
   to the system prompt, and the example config ships with a snarky one
+- One dial for courtesy: `tx_duty_budget`, the share of channel time the
+  bot may use for its own transmissions, enforced from the radio's own
+  airtime counters and reported in the log
 - Dynamically reduces its own traffic when the network is congested: it reads
   the radio's airtime counters, halves its reply rate when the channel gets
   busy, and stops replying until the channel clears
-- Token bucket rate limits, global and per sender name
+- Token bucket rate limits, global and per sender name, as a burst floor
 - Bounded in memory history rendered to the model as untrusted background,
   never as prior chat turns
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 162 tests that need no radio, no model, and no network
+- 168 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -75,7 +79,7 @@ The radio needs the MeshCore companion USB firmware, a node name equal to
 
 - A Mac or Linux computer that stays on. This is a good use for an old
   laptop that is sitting in a drawer: the bot needs no screen once it is
-  running, and one reply every 20 seconds is not much work. The default model
+  running, and a reply every 15 seconds at the very most is not much work. The default model
   uses about 18 GB of memory; 32 GB of RAM is a comfortable minimum, 64 GB is
   better. Apple Silicon works well.
 - A MeshCore companion radio on USB. Built and tested with a Heltec Wireless
@@ -346,47 +350,54 @@ score and matched rules, when it was dropped. Decisions: `answered`,
 
 ## Rate limits and channel load
 
-The defaults allow one reply every 20 seconds overall and one every 20
-seconds per sender name. Sender names are easy to forge, so the global limit
-is the one that matters.
+There is one dial: `tx_duty_budget`, the fraction of the channel's time the
+bot may occupy with its own transmissions, 0.02 by default. The monitor reads
+the radio's transmit airtime counter every `utilization_poll_s` seconds,
+works out the bot's own duty cycle over the last `utilization_window_s`, and
+steps the reply rate down as soon as it reaches the budget: halved at the
+budget, paused at twice it, relaxed one step per poll with hysteresis once
+it drops back. That makes "we use at most 2 percent of the channel" a
+statement the log can back up, and turning it down is one line in
+`config.toml`.
 
-A LoRa channel is shared by everyone in range, and every channel message is
-repeated by every repeater that hears it. On the USA preset a full 150
-character reply is roughly 0.6 seconds of airtime per transmission; a question plus a
-reply, each repeated by three repeaters, is close to three seconds of local
-airtime. At one exchange every 20 seconds that is about 13 percent of the
-channel, which is fine on a quiet mesh; at one every 30 seconds it is about
-9 percent. Sustained load past about 15 to 20
-percent is where uncoordinated senders start colliding and losing packets.
-On a busy or shared regional mesh, one reply per minute
-(`global_rate_per_min = 1.0`) is the considerate setting, and a shorter
-`reply_max_chars` cuts airtime in proportion.
+What the budget means in practice, with a full 150 character reply taking
+roughly 0.6 seconds of airtime on the USA preset:
+
+| `tx_duty_budget` | sustained pace | note |
+|---|---|---|
+| 0.01 | one reply per 60 s | very quiet, shared regional mesh |
+| 0.02 | one reply per 30 s | default |
+| 0.03 | one reply per 20 s | private or lightly used mesh |
+| 0.05 | one reply per 12 s | only where the bot is the main traffic |
+
+Underneath the dial sit two floors. `global_rate_per_min` (4, so never two
+replies closer than 15 seconds) bounds bursts when the window is still quiet,
+and `sender_rate_per_min` does the same per sender name, which is easy to
+forge and therefore only a politeness measure. Shorter replies
+(`reply_max_chars`) buy more replies for the same budget.
 
 Timing matters as much as volume. For a few seconds after any channel
 message, every repeater in range rebroadcasts it, and a reply transmitted
 into that flood is lost to collisions even though a message sent into a quiet
 channel from the same radio gets through fine. The bot therefore holds each
-reply for `reply_delay_s` seconds, six by default with some random jitter,
-counted from the moment the question arrived, so the model's own latency is
-absorbed into the wait. The JSON log records the extra hold as `held_ms`.
+reply for `reply_delay_s` seconds, eight by default, jittered between about
+six and eleven, counted from the moment the question arrived so the model's
+own latency is absorbed into the wait. The JSON log records the extra hold
+as `held_ms`.
 
-The bot also watches the channel itself. With `adaptive_enabled = true`, the
-default, it polls the radio every `utilization_poll_s` seconds for its
-received airtime and packet counters and computes the channel's receive duty
-cycle over the last `utilization_window_s` seconds.
+The bot also watches everyone else's traffic. The same monitor computes the
+received duty cycle, other people's airtime, over the same window:
 
-| Receive duty cycle | Level | Global rate |
+| Received duty cycle | Level | Global rate |
 |---|---|---|
 | below `duty_low` | full | as configured |
 | `duty_low` to `duty_high` | half | configured x 0.5 |
 | at or above `duty_high` | paused | no replies |
 
-Tightening is immediate. Relaxing goes one step per poll and only after the
-duty cycle has fallen below 80 percent of the threshold, so a channel
-hovering at a threshold does not cause flapping. The bot's own transmit
-airtime is shown but not counted, since the base limit already governs it,
-and no decision is made until at least half a window of data is in hand.
-Airtime is what this radio hears, so traffic it cannot hear does not
+The two policies share one ladder and the more restrictive one wins; the
+`utilization` and `rate_level` log records say which (`tx` or `rx`). No
+decision is made until at least half a window of data is in hand, and
+airtime is what this radio hears, so traffic it cannot hear does not
 register.
 
 ## Configuration reference
@@ -402,7 +413,7 @@ any key may appear in any section.
 | `trigger_prefix` | `""` | Empty answers everything; `"!ai "` answers only prefixed messages |
 | `reply_max_chars` | `150` | Cap on the whole outbound message, prefix included; the radio carries 160 bytes minus the node name and 2 |
 | `prompt_max_chars` | `160` | Longer prompts are dropped |
-| `reply_delay_s` | `6.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](#rate-limits-and-channel-load) |
+| `reply_delay_s` | `8.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](#rate-limits-and-channel-load) |
 | `shorten_retries` | `2` | Times a reply that does not fit goes back to the model with the exact limit |
 | `too_long_reply` | `That answer will not fit in one message, ask me something narrower.` | Sent when it still does not fit after the retries |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
@@ -416,15 +427,16 @@ any key may appear in any section.
 | `temperature` | `0.6` | Sampling temperature |
 | `max_tokens` | `80` | Output token limit |
 | `model_timeout_s` | `30.0` | Hard timeout on the model call |
-| `global_rate_per_min` | `3.0` | Replies per minute across all senders |
+| `global_rate_per_min` | `4.0` | Burst floor: replies per minute across all senders |
 | `global_burst` | `1` | Global bucket size |
-| `sender_rate_per_min` | `3.0` | Replies per minute per sender name |
+| `sender_rate_per_min` | `4.0` | Replies per minute per sender name |
 | `sender_burst` | `1` | Per sender bucket size |
 | `adaptive_enabled` | `true` | Scale the global rate by channel load |
 | `utilization_poll_s` | `10.0` | Seconds between radio statistics polls |
 | `utilization_window_s` | `60.0` | Window for the duty cycle |
 | `duty_low` | `0.05` | Receive duty cycle at which the rate is halved |
 | `duty_high` | `0.15` | Receive duty cycle at which replies pause |
+| `tx_duty_budget` | `0.02` | The dial: share of channel time for the bot's own transmissions |
 | `history_size` | `20` | Channel lines kept in memory |
 | `transcript_max_chars` | `1500` | Size of the transcript given to the model |
 | `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |

@@ -41,7 +41,7 @@ class Config:
     trigger_prefix: str = ""
     reply_max_chars: int = 150
     prompt_max_chars: int = 160
-    reply_delay_s: float = 6.0
+    reply_delay_s: float = 8.0
     shorten_retries: int = 2
     too_long_reply: str = "That answer will not fit in one message, ask me something narrower."
     apology: str = "Sorry, I couldn't answer that one."
@@ -59,9 +59,9 @@ class Config:
     model_timeout_s: float = 30.0
 
     # [limits]
-    global_rate_per_min: float = 3.0
+    global_rate_per_min: float = 4.0
     global_burst: int = 1
-    sender_rate_per_min: float = 3.0
+    sender_rate_per_min: float = 4.0
     sender_burst: int = 1
 
     # [history]
@@ -74,6 +74,7 @@ class Config:
     utilization_window_s: float = 60.0
     duty_low: float = 0.05
     duty_high: float = 0.15
+    tx_duty_budget: float = 0.02
 
     # [injection]
     injection_threshold: float = 0.45
@@ -127,6 +128,8 @@ class Config:
             errors.append("injection_threshold must be between 0 and 1")
         if self.utilization_poll_s <= 0 or self.utilization_window_s < self.utilization_poll_s:
             errors.append("utilization_poll_s must be positive and no larger than utilization_window_s")
+        if not 0.0 < self.tx_duty_budget <= 0.5:
+            errors.append("tx_duty_budget must be between 0 and 0.5")
         if not 0.0 <= self.duty_low < self.duty_high <= 1.0:
             errors.append("need 0 <= duty_low < duty_high <= 1")
         if errors:

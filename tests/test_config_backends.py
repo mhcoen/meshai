@@ -18,12 +18,12 @@ def test_defaults_match_the_agreed_setup():
     assert cfg.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert cfg.ollama_think == "off"
     assert cfg.reply_max_chars == 150
-    assert cfg.reply_delay_s == 6.0
-    assert cfg.global_rate_per_min == 3.0
-    assert cfg.sender_rate_per_min == 3.0
+    assert cfg.reply_delay_s == 8.0
+    assert cfg.global_rate_per_min == 4.0
+    assert cfg.sender_rate_per_min == 4.0
     assert cfg.injection_threshold == 0.45
     assert cfg.adaptive_enabled is True
-    assert (cfg.duty_low, cfg.duty_high) == (0.05, 0.15)
+    assert (cfg.duty_low, cfg.duty_high, cfg.tx_duty_budget) == (0.05, 0.15, 0.02)
     assert (cfg.utilization_poll_s, cfg.utilization_window_s) == (10.0, 60.0)
 
 
@@ -59,6 +59,8 @@ def test_missing_port_is_rejected():
         {"ollama_think": "maybe"},
         {"global_burst": 0},
         {"duty_low": 0.2, "duty_high": 0.1},
+        {"tx_duty_budget": 0},
+        {"tx_duty_budget": 0.9},
         {"duty_high": 1.5},
         {"utilization_poll_s": 0},
         {"utilization_poll_s": 30, "utilization_window_s": 10},

@@ -550,4 +550,3 @@ MIT. See [LICENSE](LICENSE).
 **Michael H. Coen**, W1MHC/WRYV459
 
 Email: mhcoen@gmail.com | mhcoen@alum.mit.edu
-GitHub: [@mhcoen](https://github.com/mhcoen)

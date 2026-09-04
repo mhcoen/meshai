@@ -33,6 +33,15 @@ temperature = 0.6
 max_tokens = 80
 model_timeout_s = 30.0            # hard asyncio timeout; on expiry the apology is posted
 
+[fortune]
+fortune_enabled = true            # post a daily fortune, unprompted
+fortune_time = "06:00"            # local time of this computer; a random offset up to fortune_jitter_min is added
+fortune_jitter_min = 12
+fortune_cutoff_min = 30           # if the channel is paused or the model fails, keep trying until this long after
+fortune_prefix = "Fortune: "
+fortune_prompt = "Write today's fortune for everyone on the channel: one silly, funny sentence in the style of a fortune cookie, somehow involving {subject}. Do not mention or address anyone. Today is {date}."
+fortune_fallback = "The mesh is quiet this morning, and so is your fortune."   # posted if the model's fortune will not fit
+
 [limits]
 global_rate_per_min = 4.0         # burst floor: never closer than 15 s; tx_duty_budget governs the average
 global_burst = 1

@@ -47,6 +47,8 @@ channel utilisation, and every message with the bot's decision on it:
 - Prompt injection gate at four points: each channel line, the prompt, the
   assembled context, and the reply
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
+- A daily fortune, silly and unprompted, a little after six every morning,
+  in whatever voice is active
 - Named personalities, switched from the channel: `/funny`, `/snarky`,
   `/marvin`, `/pirate`, `/haiku`, with `/help` and `/reset`; a switch reverts
   to the default after two hours and the bot says so. The presets live in
@@ -63,7 +65,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 188 tests that need no radio, no model, and no network
+- 201 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -445,6 +447,13 @@ any key may appear in any section.
 | `global_burst` | `1` | Global bucket size |
 | `sender_rate_per_min` | `4.0` | Replies per minute per sender name |
 | `sender_burst` | `1` | Per sender bucket size |
+| `fortune_enabled` | `true` | Post a daily fortune |
+| `fortune_time` | `06:00` | Local time; a random offset up to `fortune_jitter_min` is added each day |
+| `fortune_jitter_min` | `12` | Random offset after `fortune_time` |
+| `fortune_cutoff_min` | `30` | Keep retrying a deferred fortune until this long after the slot, then skip the day |
+| `fortune_prefix` | `Fortune: ` | Lead-in on the post |
+| `fortune_prompt` | see example config | The request to the model; must contain `{subject}`, may use `{date}` |
+| `fortune_fallback` | `The mesh is quiet this morning, and so is your fortune.` | Posted if the fortune will not fit after the retries |
 | `adaptive_enabled` | `true` | Scale the global rate by channel load |
 | `utilization_poll_s` | `10.0` | Seconds between radio statistics polls |
 | `utilization_window_s` | `60.0` | Window for the duty cycle |
@@ -497,6 +506,22 @@ Writing a preset for a small model:
 `temperature` matters too: 0.3 gives flat and reliable, 0.6 (the default)
 gives a persona room, above 0.8 gets loose. Restart the bot after changing
 the config.
+
+### The daily fortune
+
+With `fortune_enabled = true` the bot posts one unprompted line each morning
+at `fortune_time` (06:00, the computer's local time) plus a random offset of
+up to `fortune_jitter_min` minutes, recomputed daily so it never lands on the
+exact minute. The fortune is generated in the active voice from
+`fortune_prompt`, which gets a random subject word and the date so
+consecutive days differ, and goes out through the same path as a reply:
+plain ASCII, the injection check, the length cap with the word-budget
+retries, a global limiter token. If it still will not fit, `fortune_fallback`
+is posted instead. If the limiter is paused or the model fails, the bot
+retries every two minutes until `fortune_cutoff_min` after the slot, then
+skips the day and logs `fortune_skipped`. There is no catch-up after a
+restart, so a bot started at noon does not post a breakfast fortune. The
+monitor shows the next slot and the counts.
 
 ## Security
 

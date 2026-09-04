@@ -73,6 +73,7 @@ class Stats:
     persona: str = ""
     persona_expires_at: float | None = None  # wall clock (time.time) for display
     persona_switches: int = 0
+    posts_sent: int = 0  # unsolicited posts: fortunes, reset notices
     last_latency_ms: float | None = None
     last_decision: str = ""
     started_at: float = field(default_factory=time.time)
@@ -90,6 +91,7 @@ class BotService:
         log: EventLog,
         clock: Callable[[], float] = time.monotonic,
         monitor: Any = None,
+        fortune: Any = None,
     ):
         self.cfg = cfg
         self.mc = meshcore
@@ -99,6 +101,7 @@ class BotService:
         self.history = history
         self.log = log
         self.monitor = monitor  # optional UtilizationMonitor; started/stopped with the service
+        self.fortune = fortune  # optional FortuneScheduler; started/stopped with the service
         self._clock = clock
         self.stats = Stats(channel_idx=cfg.channel_idx, persona=cfg.default_persona)
         self._subs: list[Any] = []
@@ -145,12 +148,16 @@ class BotService:
         await self.mc.start_auto_message_fetching()
         if self.monitor is not None:
             self.monitor.start()
+        if self.fortune is not None:
+            self.fortune.start()
 
     async def stop(self) -> None:
         if self._stopped:
             return
         self._stopped = True
         await self._cancel_persona_timer()
+        if self.fortune is not None:
+            await self.fortune.stop()
         if self.monitor is not None:
             await self.monitor.stop()
         for sub in self._subs:
@@ -297,33 +304,9 @@ class BotService:
         # model with the exact limit; nothing is ever cut mid-sentence.
         available = cfg.reply_max_chars - prefix_len
         started = self._clock()
-        retries = 0
         fallback = False
         try:
-            raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
-            shaped = shape_reply(raw)
-            while len(shaped) > available and retries < cfg.shorten_retries:
-                retries += 1
-                self.stats.shorten_retries += 1
-                # Models count words far better than characters: a word budget fit 5/5 tight
-                # cases after one retry where a character budget fit 1/5.
-                target = available if retries == 1 else max(20, int(available * 0.7))
-                words = max(3, target // 7)
-                messages = messages + [
-                    {"role": "assistant", "content": shaped},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"That reply was {len(shaped)} characters and the hard limit is {available}. "
-                            f"Rewrite it as one plain sentence of at most {words} words that keeps the answer. "
-                            "Reply with the sentence only."
-                        ),
-                    },
-                ]
-                raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
-                shaped = shape_reply(raw)
-            latency_ms = round((self._clock() - started) * 1000.0, 1)
-            self.stats.last_latency_ms = latency_ms
+            shaped, retries, latency_ms = await self._generate_fitting(messages, available)
         except asyncio.TimeoutError:
             self.stats.model_errors += 1
             self.stats.last_latency_ms = round((self._clock() - started) * 1000.0, 1)
@@ -370,6 +353,88 @@ class BotService:
         entries = self.history.entries()[:-1]
         lines = [e.line() for e in entries if not e.flagged]
         return render_transcript(lines, self.cfg.transcript_max_chars)
+
+    # ------------------------------------------------------------------ generation
+
+    async def _generate_fitting(self, messages: list[dict[str, str]], available: int) -> tuple[str, int, float]:
+        """Call the model, sending a too-long reply back with a word budget up to shorten_retries times.
+
+        Returns (shaped text, retries used, latency in ms). The text may still exceed
+        ``available`` after the retries; the caller decides what to send then. Raises on
+        timeout or backend error, per call, under the configured model timeout.
+        """
+        cfg = self.cfg
+        started = self._clock()
+        retries = 0
+        raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
+        shaped = shape_reply(raw)
+        while len(shaped) > available and retries < cfg.shorten_retries:
+            retries += 1
+            self.stats.shorten_retries += 1
+            # Models count words far better than characters: a word budget fit 5/5 tight
+            # cases after one retry where a character budget fit 1/5.
+            target = available if retries == 1 else max(20, int(available * 0.7))
+            words = max(3, target // 7)
+            messages = messages + [
+                {"role": "assistant", "content": shaped},
+                {
+                    "role": "user",
+                    "content": (
+                        f"That reply was {len(shaped)} characters and the hard limit is {available}. "
+                        f"Rewrite it as one plain sentence of at most {words} words that keeps the answer. "
+                        "Reply with the sentence only."
+                    ),
+                },
+            ]
+            raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
+            shaped = shape_reply(raw)
+        latency_ms = round((self._clock() - started) * 1000.0, 1)
+        self.stats.last_latency_ms = latency_ms
+        return shaped, retries, latency_ms
+
+    async def post_generated(self, prefix: str, request: str, fallback: str, what: str) -> str:
+        """Generate an unsolicited post in the active voice and transmit it.
+
+        Same path as a reply: limiter token first (no model call without one), the
+        shortening retries, the fixed fallback if it still does not fit, the injection
+        gate, the cap. Returns "sent", "rate-limited", "model-error", "blocked",
+        "send-failed", or "no-room".
+        """
+        cfg = self.cfg
+        if not self.limiter.allow(cfg.bot_name).allowed:
+            return "rate-limited"
+        available = cfg.reply_max_chars - len(prefix)
+        if available <= 0:
+            return "no-room"
+        budget = max(1, int(available * 0.8))
+        messages = build_messages(cfg.bot_name, budget, "", request, cfg.personas[self.active_persona])
+        try:
+            shaped, retries, latency_ms = await self._generate_fitting(messages, available)
+        except asyncio.TimeoutError:
+            self.stats.model_errors += 1
+            self.log.emit("post_error", what=what, error="timeout")
+            return "model-error"
+        except Exception as exc:  # noqa: BLE001
+            self.stats.model_errors += 1
+            self.log.emit("post_error", what=what, error=f"{type(exc).__name__}: {exc}")
+            return "model-error"
+        used_fallback = False
+        if len(shaped) > available:
+            used_fallback = True
+            self.stats.fallbacks_sent += 1
+            self.log.emit("reply_too_long", what=what, length=len(shaped), limit=available, retries=retries)
+            shaped = fallback
+        verdict = self.gate.check(shaped)
+        if verdict.blocked:
+            self.stats.injection_blocks += 1
+            self.log.emit("injection_block", point=what, score=verdict.score, rules=list(verdict.rules), error=verdict.error)
+            return "blocked"
+        text = (prefix + shaped)[: cfg.reply_max_chars]  # the fallback is validated to fit; model text already does
+        if not await self._send(text):
+            return "send-failed"
+        self.stats.posts_sent += 1
+        self.log.emit("post", what=what, text=text, retries=retries, latency_ms=latency_ms, fallback=used_fallback)
+        return "sent"
 
     # ------------------------------------------------------------------ personalities
 

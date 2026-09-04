@@ -20,6 +20,17 @@ in your MeshCore app and say something. It answers one message every 30
 seconds at most and backs off when the channel is busy, so a silence usually
 means the limit rather than a fault.
 
+## Screenshots
+
+What people on the channel see, in the MeshCore app:
+
+<img src="docs/phone.png" width="420" alt="The #ai channel in the MeshCore app, with two replies from MeshAI">
+
+What you see, in the terminal monitor: radio and channel state, rate limits,
+channel utilisation, and every message with the bot's decision on it:
+
+![The MeshAI terminal monitor](docs/tui.svg)
+
 ## Features
 
 - Answers on one MeshCore channel, optionally only to messages with a prefix

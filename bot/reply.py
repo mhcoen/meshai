@@ -1,14 +1,27 @@
-"""Shape the model's output into a single channel-safe line and enforce the cap."""
+"""Shape the model's output into a single channel-safe line and enforce the cap.
+
+Everything that leaves the bot is plain ASCII with ordinary punctuation. Dashes become
+commas, ellipses become periods, curly quotes become straight ones, accented letters
+lose their accents, and anything else outside ASCII (emoji, symbols) is dropped. One
+byte per character on the air, and readable on any screen.
+"""
 
 from __future__ import annotations
 
 import re
+import unicodedata
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _SENTENCE_RE = re.compile(r"(.+?[.!?])(?=\s|$)")
-_QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"))
-# Typographic punctuation costs 3 UTF-8 bytes on the air and renders badly on small screens.
-_ASCII_PUNCT = str.maketrans({"—": " - ", "–": "-", "―": " - ", "“": '"', "”": '"', "‘": "'", "’": "'", "…": "..."})
+_QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("\u201c", "\u201d"), ("\u2018", "\u2019"))
+
+# Dashes used as separators read as commas; a hyphen inside a word stays a hyphen.
+_DASH_RE = re.compile(r"\s*[\u2014\u2013\u2015]\s*|\s+-\s+")
+_ELLIPSIS_RE = re.compile(r"\u2026|\.{3,}")
+_QUOTE_MAP = str.maketrans({"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'", "\u00b4": "'", "\u2032": "'"})
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.!?;:])")
+_DOUBLE_COMMA_RE = re.compile(r",(\s*,)+")
+_COMMA_BEFORE_STOP_RE = re.compile(r",\s*([.!?])")
 
 
 def strip_think(text: str) -> str:
@@ -28,9 +41,19 @@ def strip_wrapping_quotes(text: str) -> str:
     return text
 
 
-def ascii_punctuation(text: str) -> str:
-    """Fold dashes, curly quotes and ellipses to ASCII, then re-collapse spaces."""
-    return collapse_whitespace(text.translate(_ASCII_PUNCT))
+def plain_ascii(text: str) -> str:
+    """Reduce to ASCII with ordinary punctuation. See the module docstring."""
+    text = text.translate(_QUOTE_MAP)
+    text = _DASH_RE.sub(", ", text)
+    text = _ELLIPSIS_RE.sub(".", text)
+    text = text.replace(";", ",")
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = collapse_whitespace(text)
+    text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
+    text = _DOUBLE_COMMA_RE.sub(",", text)
+    text = _COMMA_BEFORE_STOP_RE.sub(r"\1", text)
+    return text.strip(" ,")
 
 
 def first_sentence(text: str) -> str:
@@ -56,7 +79,7 @@ def first_sentence(text: str) -> str:
 def shape_reply(raw: str) -> str:
     """The full outbound normalisation: strip think blocks, collapse, unquote, ASCII, first sentence."""
     text = collapse_whitespace(strip_think(raw))
-    text = ascii_punctuation(strip_wrapping_quotes(text))
+    text = plain_ascii(strip_wrapping_quotes(text))
     return first_sentence(text).strip()
 
 
@@ -78,7 +101,7 @@ def compose_reply(sender: str, text: str, max_chars: int) -> str | None:
             space = cut.rfind(" ")
             if space >= available // 2:
                 cut = cut[:space]
-        body = cut.rstrip()
+        body = cut.rstrip(" ,")
         if not body:
             return None
     reply = prefix + body

@@ -23,11 +23,23 @@ def test_a_leading_question_keeps_its_answer_but_nothing_after():
     assert first_sentence("Just a question?") == "Just a question?"
 
 
-def test_typographic_punctuation_is_folded_to_ascii():
-    from bot.reply import ascii_punctuation
+def test_output_is_plain_ascii_with_ordinary_punctuation():
+    from bot.reply import plain_ascii
 
-    assert ascii_punctuation("Paris — city of lights… “really”, ‘yes’ – ok") == "Paris - city of lights... \"really\", 'yes' - ok"
-    assert shape_reply("Paris—the answer.") == "Paris - the answer."
+    assert plain_ascii("Paris \u2014 city of lights\u2026 \u201creally\u201d, \u2018yes\u2019 \u2013 ok") == (
+        "Paris, city of lights. \"really\", 'yes', ok"
+    )
+    assert plain_ascii("caf\u00e9 au lait \U0001F600 done") == "cafe au lait done"
+    assert plain_ascii("first; second") == "first, second"
+    assert plain_ascii("well-known - yes") == "well-known, yes"  # spaced hyphen is a dash, inner hyphen stays
+    assert shape_reply("Paris\u2014the answer.") == "Paris, the answer."
+    assert shape_reply("Dead zones \u2014 obviously.") == "Dead zones, obviously."
+
+
+def test_shaped_output_never_contains_non_ascii():
+    out = shape_reply("\u201cSure\u201d \u2014 it\u2019s 3\u00b0C \U0001F976 tonight\u2026 maybe.")
+    assert out == "\"Sure\", it's 3C tonight. maybe." or all(ord(c) < 128 for c in out)
+    assert all(ord(c) < 128 for c in out)
 
 
 def test_first_sentence_does_not_split_on_decimals_or_abbreviated_numbers():

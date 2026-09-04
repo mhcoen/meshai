@@ -1,231 +1,436 @@
 # MeshAI
 
-A MeshCore channel bot. It listens on one channel of a USB-attached MeshCore
-companion radio, sends each message to a local LLM, and posts a one-sentence
-reply back to the same channel as `@[sender] answer`, 100 characters at most by default. Every message and every
-reply passes through [vordur](https://github.com/mhcoen/vordur)'s
-prompt-injection detector before it can reach the model or the radio.
+MeshAI is a chat bot for a MeshCore channel. It runs on a computer with a
+MeshCore companion radio plugged into a USB port, listens on one channel,
+sends each message to a language model running on the same computer, and
+posts a one sentence reply back to the channel as `@[sender] answer`. Every
+message and every reply is checked by the vordur prompt injection detector
+before it can reach the model or the radio.
 
-Python 3.11+. No web UI, no database, no on-disk history.
+The whole thing is a small Python package: `bot/`, `tests/`,
+`config.example.toml`, `README.md`, `pyproject.toml`. There is no web
+interface, no database, and no history on disk.
 
-## Threat model in one paragraph
+## Contents
 
-The channel is an untrusted input surface. The `SenderName:` prefix on every
-channel message is put there by the transmitting node and is not authenticated:
-anyone can claim any name, including the bot's own. The bot therefore treats the
-name as a label only. It is used for the reply prefix, for the loop guard, and
-for a per-name rate limit that a determined sender can trivially evade by
-rotating names; the global rate limit is the real ceiling. Everything the model
-sees from the channel (the prompt and the recent transcript) is labelled as
-untrusted in the model input, and the model's output is checked again before it
-is transmitted. The bot has no tools, no function calling, and no access to
-anything beyond the channel, so a successful injection can at worst produce one
-bad sentence, capped at 100 characters by default, at the rate-limited pace (one per 30 s
-by default, less when the channel is busy).
+1. [What you need](#what-you-need)
+2. [Install the software](#install-the-software)
+3. [Install the model](#install-the-model)
+4. [Prepare the radio](#prepare-the-radio)
+5. [Configure](#configure)
+6. [Run](#run)
+7. [How a message is handled](#how-a-message-is-handled)
+8. [Rate limits and channel load](#rate-limits-and-channel-load)
+9. [Configuration reference](#configuration-reference)
+10. [Security notes](#security-notes)
+11. [Troubleshooting](#troubleshooting)
+12. [Tests](#tests)
+13. [Moving to another computer](#moving-to-another-computer)
 
-## Setup
+## What you need
 
-```bash
-git clone <this repo> meshai && cd meshai
-uv venv --python 3.12 && source .venv/bin/activate
-# vordur is not on PyPI. Either keep its checkout next to this one as ../GuardLLM
-# (pyproject's [tool.uv.sources] points there), or install it from git first:
-#   pip install git+https://github.com/mhcoen/vordur.git
-uv pip install -e '.[dev]'
-cp config.example.toml config.toml   # then edit: port, channel_idx, bot_name
-```
+- A Mac or Linux computer that will stay on. The model needs memory: the
+  default model uses about 18 GB, so 32 GB of RAM is a comfortable minimum
+  and 64 GB is better. An Apple Silicon Mac works well.
+- A MeshCore companion radio on USB. This was built and tested with a Heltec
+  Wireless Paper (ESP32-S3, SX1262) on MeshCore companion firmware 1.17.1.
+  Any board with a MeshCore "companion radio USB" build should work.
+- Python 3.11 or newer, and git.
+- Ollama, or any server that speaks the OpenAI chat completions API.
+- A checkout of vordur, which is not on PyPI (details below).
 
-Radio side, once: flash the MeshCore **companion (USB serial)** firmware, set the
-node name to the same value as `bot_name`, set the regional radio preset, and
-create the channel the bot will serve (a `#name` channel derives its key from the
-name, so other users just add `#name` in their app). The bot refuses to start if
-the configured channel index is empty on the radio.
+## Install the software
 
-USB boards with a CP2102 bridge and the usual ESP32 auto-program circuit
-(the Heltec Wireless Paper is one) deserve a note. pyserial asserts DTR when
-it opens the port and the meshcore library then clears RTS; that combination
-holds the chip's IO0 line low for as long as the port is open. The radio keeps
-running, but if it resets for any reason while the bot is connected, from a
-brownout at full transmit power, a watchdog, or a firmware fault, it comes back
-in the serial bootloader instead of MeshCore and goes silent until it is
-power-cycled. The bot releases both lines right after opening the port, waits
-for a possible reboot, and retries the handshake without reopening. If a start
-reports "no response" on a radio that was working, unplug it and plug it back
-in; `esptool --before no-reset chip-id` connecting straight away is the
-tell-tale that it was sitting in the bootloader.
+These steps use `uv` because it is fast and creates the virtual environment
+for you. Plain `python -m venv` and `pip` work the same way; the pip
+equivalents are given where they differ.
 
-Model side: an Ollama server on the same machine with the configured model
-pulled (`ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M`), or any OpenAI-compatible `/chat/completions`
-endpoint with `backend = "openai"`.
+1. Install uv if you do not have it:
 
-## Running
+       curl -LsSf https://astral.sh/uv/install.sh | sh
 
-```bash
-meshai --config config.toml            # with the terminal monitor
-meshai --config config.toml --headless # JSON log only, for a service manager
-python -m bot --config config.toml     # same thing without the console script
-```
+2. Get the code and the vordur checkout side by side. The project's
+   `pyproject.toml` points at `../GuardLLM` for vordur, so keep that name or
+   edit the path under `[tool.uv.sources]`.
 
-Stop with `q` in the monitor, or SIGINT/SIGTERM. Shutdown unsubscribes, stops
-auto-fetch, and disconnects the radio.
+       mkdir -p ~/proj && cd ~/proj
+       git clone https://github.com/mhcoen/vordur.git GuardLLM
+       git clone <this repository> meshchat
+       cd meshchat
 
-The monitor shows connection state, channel name and index, a scrolling log of
-inbound messages with sender, hop count, and decision, the current rate-limiter
-state, last model latency, and reply/block counters. The same information goes
-to the JSON log whether or not the monitor is on.
+3. Create the environment and install:
 
-## What happens to a message
+       uv venv --python 3.12
+       uv pip install -e ../GuardLLM
+       uv pip install -e '.[dev]'
 
-1. **Parse.** `sender` is everything before the first colon; the prompt is
-   everything after it. Exactly as the upstream meshcore example does it.
-2. **Loop guard.** Dropped if `sender` equals `bot_name`, or the prompt starts
-   with `@[` (a reply from this or any other bot).
-3. **Trigger.** With `trigger_prefix = ""` (the default, for a dedicated channel)
-   every message is a prompt. Set `"!ai "` on a shared channel; the prefix must
-   match exactly and something must follow it.
-4. **Length.** Prompts over `prompt_max_chars` are dropped.
-5. **vordur, prompt.** Dropped if the score is at or above `vordur_threshold`.
-6. **Rate limits.** Token buckets, global and per sender name. Tokens are taken
-   here, once. Whatever goes out for this message (reply or apology) rides on
-   them. Exhausted buckets drop silently, with a log line.
-7. **Context.** The last `history_size` channel lines (including the bot's own
-   posts, excluding lines vordur flagged at ingestion and excluding the current
-   message) are rendered as `Sender: text`, truncated from the oldest end to
-   `transcript_max_chars`, and placed inside one user message between explicit
-   delimiters that label it as untrusted, *after* the current prompt. History
-   is never replayed as prior chat turns. The prompt-first layout plus system
-   rule 7 (lines that address the bot by name or tell it how to behave are
-   attacks) took qwen3-30b-a3b-instruct from following 4 of 12 planted
-   transcript instructions to 0 of 12 in a small test matrix.
-8. **vordur, context.** The transcript and prompt together, as one document, so
-   fragments that pass individually but combine into an instruction are caught.
-9. **Model.** One call under a hard `model_timeout_s` timeout. On timeout or any
-   backend error the fixed `apology` is posted instead.
-10. **Shape.** Strip any leaked `<think>` block, collapse whitespace, fold
-    dashes, curly quotes and ellipses to ASCII (three bytes each on the air),
-    keep the first sentence, plus the sentence after it when the first is a
-    question, since a riddle without its punchline is not an answer.
-11. **vordur, reply.** The model's output is scored. A block means nothing is
-    sent, not even the apology.
-12. **Cap and send.** `@[sender] ` plus the text, cut to `reply_max_chars`
-    total. The prefix is never truncated; if a long sender name leaves no room
-    the message is dropped. A send error is logged and counted, never retried.
+   With pip instead:
 
-Every inbound message produces one `inbound` JSON log record with `sender`,
-`prompt`, `path_len`, `decision`, and the reason or vordur score and rules when
-it was dropped. Decisions: `answered`, `apology`, `dropped:loop-guard`,
-`dropped:no-trigger`, `dropped:too-long`, `dropped:vordur-blocked`,
-`dropped:rate-limited`, `dropped:empty-reply`, `dropped:send-failed`.
+       python3 -m venv .venv
+       .venv/bin/pip install -e ../GuardLLM
+       .venv/bin/pip install -e '.[dev]'
 
-## Adaptive rate limiting
+   If you would rather not keep a vordur checkout, install it from git
+   first and the sibling path is never used:
 
-With `adaptive_enabled = true` (the default) a monitor task polls the radio
-every `utilization_poll_s` seconds for its cumulative airtime counters
-(`get_stats_radio`: transmit and receive seconds, noise floor, last RSSI/SNR)
-and packet counters (`get_stats_packets`). Over a sliding
-`utilization_window_s` window it computes the channel duty cycle, *received*
-airtime divided by elapsed time, and packets per minute, and scales the
-**global** reply rate. The bot's own transmit airtime is reported alongside but
-not counted: the base rate limit already governs it, and counting it made the
-limiter fight itself. No level change is made until the window holds at least
-half of `utilization_window_s` of data, so a single exchange right after
-startup cannot read as a busy channel.
+       uv pip install git+https://github.com/mhcoen/vordur.git
 
-| duty cycle | level | global rate |
-|---|---|---|
-| below `duty_low` | full | configured |
-| `duty_low` to `duty_high` | half | configured x 0.5 |
-| at or above `duty_high` | paused | 0, no replies |
+4. Check that the command exists:
 
-Tightening is immediate. Relaxing goes one level per poll and only once the
-duty cycle has fallen below 80% of the threshold that level guards, so a
-channel hovering at a threshold does not flap. Per-sender limits are not
-scaled. The monitor's reading, the current level, and the effective rate are
-shown in the TUI, logged as `utilization` records on every poll, and as
-`rate_level` records on each change.
+       .venv/bin/meshai --version
 
-Airtime is what this radio heard or sent. A busy channel it cannot hear does
-not register; that is inherent to a node-local measurement. The counters are
-integer seconds, so a 60 s window resolves about 1.7 percentage points. If a
-stats poll fails the level is left as it is and a `utilization_error` record
-is written; the bot keeps running.
+## Install the model
+
+The default backend is Ollama.
+
+1. Install Ollama from https://ollama.com and make sure it is running. On a
+   Mac it runs as a menu bar application. It listens on
+   `http://127.0.0.1:11434`.
+
+2. Pull the model:
+
+       ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M
+
+   This is about 18 GB. It is a mixture of experts model with about 3 billion
+   active parameters, so it answers a short prompt in well under a second on
+   Apple Silicon once loaded, while keeping the quality of a much larger
+   model. Use the `instruct` variant and not the plain `qwen3:30b-a3b` tag:
+   the plain tag is a "thinking" model that writes its reasoning into the
+   reply even with thinking turned off.
+
+   If the `ollama` command itself misbehaves, the HTTP API does the same job:
+
+       curl http://127.0.0.1:11434/api/pull -d '{"name":"qwen3:30b-a3b-instruct-2507-q4_K_M"}'
+
+3. Any other Ollama model works by changing `model` in the config. For a
+   model that rejects the `think` option, set `ollama_think = "omit"`.
+
+To use a different server (LM Studio, llama.cpp's server, vLLM, or a hosted
+API), set `backend = "openai"`, `openai_base_url` to the server's `/v1`
+address, `model` to the model name it expects, and put the API key, if the
+server needs one, in the environment variable `MESHAI_OPENAI_API_KEY`. The
+key is never read from the config file and never written to a log.
+
+## Prepare the radio
+
+The bot needs a MeshCore companion radio with the USB serial companion
+firmware, a node name, the right regional radio settings, and the channel it
+is going to serve. Do this once.
+
+1. Flash the companion firmware. Use the MeshCore web flasher at
+   https://flasher.meshcore.co.uk, choose your board, and pick the
+   "Companion Radio USB" build. Or download the `..._companion_radio_usb_..._merged.bin`
+   file for your board from the MeshCore GitHub releases and flash it with
+   esptool:
+
+       pip install esptool
+       esptool --port /dev/cu.usbserial-0001 --chip esp32s3 erase-flash
+       esptool --port /dev/cu.usbserial-0001 --chip esp32s3 write-flash 0x0 <merged.bin>
+
+2. Find the serial port. On a Mac:
+
+       ls /dev/cu.*
+
+   A CP2102 board shows up as `/dev/cu.usbserial-XXXX`; a board with native
+   USB shows up as `/dev/cu.usbmodemXXXX`. On Linux look for
+   `/dev/ttyUSB0` or `/dev/ttyACM0` and make sure your user is in the
+   `dialout` group.
+
+3. Set the node name, transmit power, radio preset, and create the channel.
+   The node name must be the same as `bot_name` in the config, because the
+   bot recognises its own posts by that name. The script below does all of
+   it with the meshcore library that is already installed in the venv. Change
+   the port, name, preset, and channel name to suit.
+
+       cat > radio_setup.py <<'EOF'
+       import asyncio, sys
+       from meshcore import MeshCore, EventType
+
+       PORT = "/dev/cu.usbserial-0001"
+       NAME = "MeshAI"
+       FREQ, BW, SF, CR = 910.525, 62.5, 7, 5   # USA/Canada recommended preset
+       CHANNEL_IDX, CHANNEL_NAME = 1, "#ai"
+
+       async def main():
+           mc = await MeshCore.create_serial(PORT)
+           if mc is None:
+               print("no response on", PORT); return 1
+           for label, coro in [
+               ("name", mc.commands.set_name(NAME)),
+               ("tx power", mc.commands.set_tx_power(int(mc.self_info.get("max_tx_power") or 22))),
+               ("radio", mc.commands.set_radio(FREQ, BW, SF, CR)),
+               ("channel", mc.commands.set_channel(CHANNEL_IDX, CHANNEL_NAME)),
+           ]:
+               res = await coro
+               print(label, "ERROR" if res.type == EventType.ERROR else "ok", res.payload)
+           res = await mc.commands.get_channel(CHANNEL_IDX)
+           print("channel", CHANNEL_IDX, "is", repr(res.payload.get("channel_name")))
+           await mc.commands.send_advert(flood=True)
+           await mc.disconnect()
+           return 0
+
+       sys.exit(asyncio.run(main()))
+       EOF
+       .venv/bin/python radio_setup.py
+
+   The regional presets are listed in the MeshCore FAQ. As of late 2025 the
+   USA/Canada recommendation is 910.525 MHz, bandwidth 62.5 kHz, spreading
+   factor 7, coding rate 5. Use whatever your local mesh uses; radios on
+   different settings cannot hear each other.
+
+   A channel whose name starts with `#` gets its key from the name, so anyone
+   who adds `#ai` in their MeshCore app lands on the same channel. The bot
+   refuses to start if the configured channel index is empty on the radio.
+
+   You can also do all of this from the MeshCore phone app over Bluetooth if
+   you flash the BLE companion build first, then reflash the USB build.
+
+4. Add the same channel on the phone or radio you will test from.
+
+## Configure
+
+    cp config.example.toml config.toml
+
+Then edit `config.toml`. The three settings that must match your setup:
+
+- `port`: the serial device from step 2 above.
+- `channel_idx`: the slot the channel was created in (1 in the script).
+- `bot_name`: the node name (MeshAI in the script).
+
+Everything else has a sensible default. The full list is in the
+[configuration reference](#configuration-reference). Every key can also be
+set as an environment variable named `MESHAI_` plus the key in upper case,
+for example `MESHAI_PORT=/dev/ttyUSB0`, and the environment wins over the
+file.
+
+`config.toml` is ignored by git so your port and persona do not end up in a
+commit.
+
+## Run
+
+    .venv/bin/meshai --config config.toml
+
+This opens a terminal monitor with the radio and channel state, a scrolling
+log of every message on the channel with its hop count and what the bot
+decided to do with it, the rate limiter, the channel utilisation, and
+counters. Press `q` to quit. While the monitor is up, the JSON log goes to
+`meshai.jsonl` in the current directory.
+
+For a service or a screen session:
+
+    .venv/bin/meshai --config config.toml --headless
+
+Headless mode writes the JSON log to standard error, or to `--log-file PATH`
+or the `log_file` config key. `--debug` adds the meshcore library's own
+frame level log to `<log file>.debug`. Stop it with Ctrl-C or SIGTERM; the
+bot unsubscribes, stops message fetching, and closes the port.
+
+Then send a message on the channel from your phone. The bot answers every
+message on the channel by default. If you would rather it only answer
+messages that start with a keyword, set `trigger_prefix = "!ai "`.
+
+## How a message is handled
+
+The companion delivers a channel message as `SenderName: text`. The sender
+part is whatever the sending node put there; nothing verifies it.
+
+1. Parse. The sender is everything before the first colon; the prompt is
+   everything after it.
+2. Loop guard. Dropped if the sender is the bot's own name, or the prompt
+   starts with `@[`, which is a reply from this or any other bot.
+3. Trigger. With an empty `trigger_prefix` every message is a prompt. With a
+   prefix, the message must start with it exactly and something must follow.
+4. Length. Prompts over `prompt_max_chars` are dropped.
+5. vordur, on the prompt. Dropped if the injection score is at or above
+   `vordur_threshold`.
+6. Rate limits. A global token bucket and one per sender name. Tokens are
+   taken here, once, and whatever goes out for this message rides on them.
+   When a bucket is empty the message is dropped and logged.
+7. Context. The last `history_size` channel lines, including the bot's own
+   posts and excluding lines vordur flagged when they arrived, are rendered
+   as `Sender: text`, trimmed from the oldest end to `transcript_max_chars`,
+   and placed in one user message after the current prompt, between markers
+   that label them as untrusted. History is never replayed as earlier chat
+   turns.
+8. vordur, on the assembled context. Fragments that pass one at a time but
+   add up to an instruction are caught here.
+9. Model. One call under a hard timeout of `model_timeout_s`. On a timeout or
+   any error the fixed `apology` text is posted instead.
+10. Shape. Strip any leaked `<think>` block, collapse whitespace, reduce to
+    plain ASCII with ordinary punctuation, keep the first sentence. If the
+    first sentence is a question the next sentence is kept too, so a riddle
+    keeps its punchline.
+11. vordur, on the reply. If it is flagged nothing is sent, not even the
+    apology.
+12. Cap and send. `@[sender] ` plus the text, cut to `reply_max_chars` in
+    total. The prefix is never cut; if a very long sender name leaves no room,
+    nothing is sent. A send failure is logged and not retried.
+
+Every inbound message produces one `inbound` record in the JSON log with
+`sender`, `prompt`, `path_len`, `decision`, and the reason, or the vordur
+score and matched rules, when it was dropped. The decisions are `answered`,
+`apology`, `dropped:loop-guard`, `dropped:no-trigger`, `dropped:too-long`,
+`dropped:vordur-blocked`, `dropped:rate-limited`, `dropped:empty-reply`, and
+`dropped:send-failed`.
+
+## Rate limits and channel load
+
+The defaults allow one reply every 30 seconds overall and one every 30
+seconds per sender name. Sender names are easy to forge, so the global limit
+is the one that matters.
+
+A LoRa channel is shared by everyone in range and every channel message is
+repeated by every repeater that hears it. On the USA preset a 100 character
+reply is roughly half a second of airtime per transmission; a question plus a
+reply, each repeated by three repeaters, is close to three seconds of local
+airtime. At one exchange every 30 seconds that is about 9 percent of the
+channel, which is fine on a quiet mesh. Sustained load past about 15 to 20
+percent is where uncoordinated senders start colliding and losing packets.
+On a busy or shared regional mesh, one reply per minute
+(`global_rate_per_min = 1.0`) is the considerate setting, and a shorter
+`reply_max_chars` cuts airtime in proportion.
+
+The bot also watches the channel itself. With `adaptive_enabled = true`, the
+default, it polls the radio every `utilization_poll_s` seconds for its
+received airtime and packet counters and computes the channel's receive duty
+cycle over the last `utilization_window_s` seconds. Below `duty_low` the
+global rate is as configured. From `duty_low` it is halved. From `duty_high`
+replies pause. Tightening is immediate; relaxing goes one step per poll and
+only after the duty cycle has fallen below 80 percent of the threshold, so a
+channel hovering at a threshold does not cause flapping. The bot's own
+transmit airtime is shown but not counted, since the base limit already
+governs it, and no decision is made until at least half a window of data is
+in hand. Airtime is what this radio hears, so traffic it cannot hear does not
+register.
 
 ## Configuration reference
 
-`config.toml`, sections are cosmetic; every key is also an environment variable
-`MESHAI_<KEY_UPPER>` which wins over the file.
+All keys, with their defaults. Sections in the file are for readability only;
+any key may appear in any section.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `port` | required | Serial device of the companion, e.g. `/dev/cu.usbserial-0001` |
+| `port` | required | Serial device of the companion radio |
 | `channel_idx` | `1` | Channel slot on the radio to serve |
-| `bot_name` | `MeshAI` | Must equal the radio's node name; the loop guard keys on it |
-| `trigger_prefix` | `""` | `""` answers everything; e.g. `"!ai "` on shared channels |
-| `reply_max_chars` | `100` | Hard cap on the whole outbound message |
+| `bot_name` | `MeshAI` | Must equal the radio's node name |
+| `trigger_prefix` | `""` | Empty answers everything; `"!ai "` answers only prefixed messages |
+| `reply_max_chars` | `100` | Cap on the whole outbound message, prefix included |
 | `prompt_max_chars` | `140` | Longer prompts are dropped |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
-| `persona` | `""` | Optional sentence prepended to the fixed system prompt |
+| `persona` | `""` | Optional text prepended to the fixed system prompt |
 | `backend` | `ollama` | `ollama` or `openai` |
-| `model` | `qwen3:30b-a3b-instruct-2507-q4_K_M` | Model name for the chosen backend |
-| `ollama_host` | `http://127.0.0.1:11434` | |
-| `ollama_think` | `off` | `off`, `on`, or `omit` for models that reject the flag |
-| `ollama_keep_alive` | `30m` | Keeps the model resident between replies |
-| `openai_base_url` | `http://127.0.0.1:1234/v1` | Any OpenAI-compatible server |
-| `temperature` | `0.6` | |
-| `max_tokens` | `80` | Output token limit; replies are one sentence anyway |
-| `model_timeout_s` | `30.0` | Hard asyncio timeout on the model call |
-| `global_rate_per_min` / `global_burst` | `2.0` / `1` | Replies per minute, all senders |
-| `sender_rate_per_min` / `sender_burst` | `2.0` / `1` | Per sender name (spoofable) |
-| `adaptive_enabled` | `true` | Scale the global rate by channel duty cycle |
-| `utilization_poll_s` | `10.0` | Seconds between radio stats polls |
-| `utilization_window_s` | `60.0` | Sliding window for the duty-cycle computation |
-| `duty_low` | `0.05` | Duty cycle at which the global rate is halved |
-| `duty_high` | `0.15` | Duty cycle at which replies pause |
-| `history_size` | `20` | Ring buffer length |
-| `transcript_max_chars` | `1500` | Rendered transcript budget |
+| `model` | `qwen3:30b-a3b-instruct-2507-q4_K_M` | Model name for the backend |
+| `ollama_host` | `http://127.0.0.1:11434` | Ollama server |
+| `ollama_think` | `off` | `off`, `on`, or `omit` for models that reject the option |
+| `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded between replies |
+| `openai_base_url` | `http://127.0.0.1:1234/v1` | OpenAI compatible server, when `backend = "openai"` |
+| `temperature` | `0.6` | Sampling temperature |
+| `max_tokens` | `80` | Output token limit |
+| `model_timeout_s` | `30.0` | Hard timeout on the model call |
+| `global_rate_per_min` | `2.0` | Replies per minute across all senders |
+| `global_burst` | `1` | Global bucket size |
+| `sender_rate_per_min` | `2.0` | Replies per minute per sender name |
+| `sender_burst` | `1` | Per sender bucket size |
+| `adaptive_enabled` | `true` | Scale the global rate by channel load |
+| `utilization_poll_s` | `10.0` | Seconds between radio statistics polls |
+| `utilization_window_s` | `60.0` | Window for the duty cycle |
+| `duty_low` | `0.05` | Receive duty cycle at which the rate is halved |
+| `duty_high` | `0.15` | Receive duty cycle at which replies pause |
+| `history_size` | `20` | Channel lines kept in memory |
+| `transcript_max_chars` | `1500` | Size of the transcript given to the model |
 | `vordur_threshold` | `0.45` | Block at or above this score; vordur's own cutoff is 0.45 |
 | `vordur_sanitize` | `false` | Run vordur's sanitizer on the prompt before scoring |
-| `log_file` | `""` | `""` logs JSON lines to stderr; otherwise appends to this file |
+| `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshai.jsonl` (monitor) |
 
-The OpenAI-compatible API key is read only from the environment variable
-`MESHAI_OPENAI_API_KEY`. It is not a config key and never appears in a log.
+The example config ships with a persona that gives the bot a sarcastic
+streak. Clear it for a plain assistant.
 
-## vordur integration notes
+## Security notes
 
-The bot uses one function, `vordur.security.prompt_injection_detector.detect_prompt_injection`,
-with plaintext content type, at the four points above. It is stateless and pure
-regex, about 0.07 ms per call by vordur's own measurement. It returns a score in
-0..1 and the matched rule names; the score is compared against
-`vordur_threshold`. The optional sanitize mode calls `vordur.security.sanitizer.sanitize`
-before scoring and feeds the cleaned text to the model.
+The channel is an untrusted input. Anyone in radio range can send on it and
+can claim any sender name, including the bot's. The bot uses the name only
+as a label for the reply prefix, the loop guard, and the per name rate limit.
+It has no tools, no function calling, and no access to anything but the
+channel, so the worst a successful injection can do is one bad sentence,
+capped at `reply_max_chars`, at the rate limited pace.
 
-Things worth knowing:
+vordur is used at four points: each channel line when it arrives, the prompt,
+the assembled transcript plus prompt, and the model's reply. The bot calls
+`vordur.security.prompt_injection_detector.detect_prompt_injection` with the
+plain text content type. It is stateless, pure pattern matching, and takes
+well under a millisecond. It returns a score between 0 and 1 and the names of
+the matched rules; the score is compared with `vordur_threshold`. With
+`vordur_sanitize = true` the prompt is first passed through
+`vordur.security.sanitizer.sanitize`, which strips invisible characters,
+folds look alike characters, and decodes encoded payloads, and the cleaned
+text is what the model sees.
 
-- The detector is a module-level function that vordur's own tests and benchmarks
-  call, but it is not re-exported from the package's top level. The `Guard`
-  facade carries session-risk state and does not surface the score, so it is
-  not used here. If vordur later exposes the detector through its public
-  surface, `bot/guard.py` is the one place to change.
-- vordur's patterns are English-only. Its README reports precision above 99%
-  and recall about 75% on its own corpus, so roughly a quarter of attacks get
-  through the detector. The outbound check, the one-sentence rule, the
-  character cap, and the absence of tools are what limit the damage.
-- Any exception from vordur is treated as a block: no model call, no transmit,
-  an `inbound` record with `vordur_error`.
+Some limits to know about:
+
+- The detector is a module level function used by vordur's own tests and
+  benchmarks, but it is not re-exported from the package's top level. The
+  `Guard` facade is not used because it keeps session state and does not
+  expose the score. `bot/guard.py` is the one place to change if that
+  changes.
+- vordur's rules are English only, and its own published figures are about
+  99 percent precision and 75 percent recall on its corpus. Roughly a quarter
+  of attack phrasings get past it. The model input is built to help: the
+  prompt comes before the history, and the system prompt says that history
+  lines addressing the bot by name or telling it how to behave are attacks.
+  On the default model that took planted transcript instructions from being
+  followed 4 times in 12 to 0 times in 30.
+- Any exception from vordur is treated as a block: no model call, nothing
+  sent, and an `inbound` record with `vordur_error`.
+
+The API key for an OpenAI compatible backend comes only from the
+`MESHAI_OPENAI_API_KEY` environment variable and is never logged.
+
+## Troubleshooting
+
+**"no response from a MeshCore companion" on a radio that was working.**
+Boards with a CP2102 USB bridge and the usual ESP32 auto program circuit
+(the Heltec Wireless Paper is one) can end up in the serial bootloader. The
+pyserial library asserts DTR when it opens the port and the meshcore library
+then clears RTS, which holds the chip's IO0 line low for as long as the port
+is open. The radio keeps running, but if it resets for any reason while the
+port is open, a brownout at full transmit power for instance, it comes back
+in the bootloader and stays silent until it is power cycled. The bot releases
+both lines right after opening the port, waits for a possible reboot, and
+retries the handshake without reopening, so this should not happen while it
+runs. If it does, unplug the radio, wait a few seconds, and plug it back in.
+To confirm the diagnosis, `esptool --port <port> --before no-reset chip-id`
+connects immediately when the chip is in the bootloader and fails when it is
+running MeshCore.
+
+**The bot answered once and then went quiet.** Look at the JSON log. A
+`dropped:rate-limited` line means the second message came inside the limit;
+a `rate_level` line means the channel load monitor stepped the rate down.
+Neither is a fault. If there are no `inbound` lines at all after the first
+reply, the radio has most likely stopped pushing messages; see the previous
+item.
+
+**Replies are cut off mid sentence.** The model is told to use 80 percent of
+the room and the hard cap trims the rest. Raising `reply_max_chars` costs
+airtime; lowering `max_tokens` shortens replies at the source.
+
+**"channel N is empty on this radio".** The channel slot in `channel_idx`
+has no channel. Create it with the setup script or the app.
+
+**The model is slow the first time.** Ollama loads the model on first use and
+unloads it after `ollama_keep_alive` of inactivity. The default keeps it
+loaded for 30 minutes after each reply.
 
 ## Tests
 
-```bash
-pytest
-```
+    .venv/bin/pytest
 
-The MeshCore object and the model are both faked; no radio, no Ollama, no
-network. The vordur tests use the injection strings from vordur's own test
-suite and assert that flagged input never reaches the model and never reaches
-`send_chan_msg`.
+No radio, no model server, and no network are needed. The MeshCore object and
+the model backend are replaced by fakes. The vordur tests use the injection
+strings from vordur's own test suite and check that flagged text never
+reaches the model and never reaches the radio.
 
-## Moving to another machine
+## Moving to another computer
 
-Copy or clone the repo, create the venv, install as above, pull the model on
-the new machine, and change `port` in `config.toml`. Nothing else is
-machine-specific.
+Clone or copy the repository, install as above, pull the model on the new
+computer, plug in the radio, and change `port` in `config.toml`. Nothing
+else is specific to the machine.

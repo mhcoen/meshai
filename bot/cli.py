@@ -9,7 +9,8 @@ import signal
 import sys
 from collections.abc import Sequence
 
-from meshcore import MeshCore
+from meshcore import EventType, MeshCore
+from meshcore.serial_cx import SerialConnection
 
 from bot import __version__
 from bot.backends import make_backend
@@ -67,7 +68,7 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
 
 
 def release_boot_lines(meshcore) -> None:
-    """Drop DTR and RTS after connecting.
+    """Drop DTR and RTS after opening the port.
 
     pyserial asserts DTR on open and meshcore then clears RTS. On the ESP32
     auto-program circuit (CP2102 boards such as the Heltec Wireless Paper) that
@@ -84,16 +85,28 @@ def release_boot_lines(meshcore) -> None:
         pass  # not a pyserial transport (tests, other connection types)
 
 
-async def connect(cfg: Config, attempts: int = 3, delay_s: float = 2.0):
-    """Open the companion; retry a couple of times in case it is still booting."""
+async def connect(cfg: Config, attempts: int = 3, boot_delay_s: float = 2.5):
+    """Open the companion and complete the app-start handshake.
+
+    Same steps as ``MeshCore.create_serial`` (dispatcher, port, app start), with two
+    changes: the boot lines are released right after the port opens, and the
+    handshake waits for a possible reboot and is retried without reopening the
+    port, because reopening would toggle the lines again.
+    """
+    meshcore = MeshCore(SerialConnection(cfg.port, 115200))
+    await meshcore.dispatcher.start()
+    if await meshcore.connection_manager.connect() is None:
+        await meshcore.disconnect()
+        return None
+    release_boot_lines(meshcore)
+    await asyncio.sleep(boot_delay_s)
     for attempt in range(1, attempts + 1):
-        meshcore = await MeshCore.create_serial(cfg.port)
-        if meshcore is not None:
-            release_boot_lines(meshcore)
+        res = await meshcore.commands.send_appstart()
+        if res is not None and res.type != EventType.ERROR:
             return meshcore
         if attempt < attempts:
-            print(f"no response from {cfg.port}, retrying ({attempt}/{attempts})...", file=sys.stderr)
-            await asyncio.sleep(delay_s)
+            print(f"no handshake from {cfg.port}, retrying ({attempt}/{attempts})...", file=sys.stderr)
+    await meshcore.disconnect()
     return None
 
 

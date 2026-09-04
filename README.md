@@ -41,6 +41,19 @@ create the channel the bot will serve (a `#name` channel derives its key from th
 name, so other users just add `#name` in their app). The bot refuses to start if
 the configured channel index is empty on the radio.
 
+USB boards with a CP2102 bridge and the usual ESP32 auto-program circuit
+(the Heltec Wireless Paper is one) deserve a note. pyserial asserts DTR when
+it opens the port and the meshcore library then clears RTS; that combination
+holds the chip's IO0 line low for as long as the port is open. The radio keeps
+running, but if it resets for any reason while the bot is connected, from a
+brownout at full transmit power, a watchdog, or a firmware fault, it comes back
+in the serial bootloader instead of MeshCore and goes silent until it is
+power-cycled. The bot releases both lines right after opening the port, waits
+for a possible reboot, and retries the handshake without reopening. If a start
+reports "no response" on a radio that was working, unplug it and plug it back
+in; `esptool --before no-reset chip-id` connecting straight away is the
+tell-tale that it was sitting in the bootloader.
+
 Model side: an Ollama server on the same machine with the configured model
 pulled (`ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M`), or any OpenAI-compatible `/chat/completions`
 endpoint with `backend = "openai"`.

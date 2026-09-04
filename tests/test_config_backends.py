@@ -17,7 +17,7 @@ def test_defaults_match_the_agreed_setup():
     assert cfg.backend == "ollama"
     assert cfg.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert cfg.ollama_think == "off"
-    assert cfg.reply_max_chars == 100
+    assert cfg.reply_max_chars == 150
     assert cfg.reply_delay_s == 6.0
     assert cfg.global_rate_per_min == 3.0
     assert cfg.sender_rate_per_min == 3.0
@@ -53,6 +53,8 @@ def test_missing_port_is_rejected():
         {"backend": "anthropic"},
         {"channel_idx": 300},
         {"reply_max_chars": 0},
+        {"reply_max_chars": 153},  # MeshAI: 160 - 6 - 2 = 152 is the most the radio will carry
+        {"bot_name": "A very long node name here", "reply_max_chars": 150},
         {"injection_threshold": 1.5},
         {"ollama_think": "maybe"},
         {"global_burst": 0},

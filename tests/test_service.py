@@ -205,7 +205,7 @@ async def test_reply_is_one_sentence_whitespace_collapsed_and_capped(harness):
     h = harness(backend=FakeBackend(reply=long))
     assert await h.say("Alice: q") is Decision.ANSWERED
     reply = h.sent[0][1]
-    assert len(reply) <= 120
+    assert len(reply) <= h.cfg.reply_max_chars
     assert reply.startswith("@[Alice] ")
     assert "\n" not in reply and "\t" not in reply
     assert "Second sentence" not in reply
@@ -219,7 +219,7 @@ async def test_short_reply_is_sent_as_is(harness):
 
 async def test_long_sender_name_leaves_no_room_and_nothing_is_sent(harness):
     h = harness()
-    assert await h.say("x" * 118 + ": q") is Decision.DROP_EMPTY
+    assert await h.say("x" * 148 + ": q") is Decision.DROP_EMPTY
     assert h.sent == []
 
 

@@ -19,6 +19,9 @@ from typing import Any
 ENV_PREFIX = "MESHAI_"
 API_KEY_ENV = "MESHAI_OPENAI_API_KEY"
 
+# MeshCore packs "<node name>: <text>" into at most this many bytes and silently truncates the rest.
+WIRE_TEXT_MAX = 160
+
 BACKENDS = ("ollama", "openai")
 THINK_MODES = ("off", "on", "omit")
 
@@ -36,8 +39,8 @@ class Config:
     # [bot]
     bot_name: str = "MeshAI"
     trigger_prefix: str = ""
-    reply_max_chars: int = 100
-    prompt_max_chars: int = 140
+    reply_max_chars: int = 150
+    prompt_max_chars: int = 160
     reply_delay_s: float = 6.0
     apology: str = "Sorry, I couldn't answer that one."
     persona: str = ""
@@ -92,6 +95,12 @@ class Config:
             errors.append("model must not be empty")
         if self.reply_max_chars <= 0:
             errors.append("reply_max_chars must be positive")
+        wire_room = WIRE_TEXT_MAX - len(self.bot_name.encode("utf-8")) - 2
+        if self.reply_max_chars > wire_room:
+            errors.append(
+                f"reply_max_chars must be at most {wire_room} for bot_name {self.bot_name!r}: the radio packs "
+                f"'{self.bot_name}: ' plus the reply into {WIRE_TEXT_MAX} bytes and cuts the rest"
+            )
         if self.prompt_max_chars <= 0:
             errors.append("prompt_max_chars must be positive")
         if self.reply_delay_s < 0:

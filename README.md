@@ -37,8 +37,8 @@ channel utilisation, and every message with the bot's decision on it:
 
 - Answers on one MeshCore channel, optionally only to messages with a prefix
 - Local model through Ollama, or any OpenAI compatible chat endpoint
-- One sentence replies capped at 100 characters, plain ASCII, one byte per
-  character on the air
+- One sentence replies, plain ASCII, one byte per character on the air, capped
+  at 150 characters, which is all the radio will carry
 - Prompt injection gate at four points: each channel line, the prompt, the
   assembled context, and the reply
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
@@ -346,8 +346,8 @@ seconds per sender name. Sender names are easy to forge, so the global limit
 is the one that matters.
 
 A LoRa channel is shared by everyone in range, and every channel message is
-repeated by every repeater that hears it. On the USA preset a 100 character
-reply is roughly half a second of airtime per transmission; a question plus a
+repeated by every repeater that hears it. On the USA preset a full 150
+character reply is roughly 0.6 seconds of airtime per transmission; a question plus a
 reply, each repeated by three repeaters, is close to three seconds of local
 airtime. At one exchange every 20 seconds that is about 13 percent of the
 channel, which is fine on a quiet mesh; at one every 30 seconds it is about
@@ -395,8 +395,8 @@ any key may appear in any section.
 | `channel_idx` | `1` | Channel slot on the radio to serve |
 | `bot_name` | `MeshAI` | Must equal the radio's node name |
 | `trigger_prefix` | `""` | Empty answers everything; `"!ai "` answers only prefixed messages |
-| `reply_max_chars` | `100` | Cap on the whole outbound message, prefix included |
-| `prompt_max_chars` | `140` | Longer prompts are dropped |
+| `reply_max_chars` | `150` | Cap on the whole outbound message, prefix included; the radio carries 160 bytes minus the node name and 2 |
+| `prompt_max_chars` | `160` | Longer prompts are dropped |
 | `reply_delay_s` | `6.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](#rate-limits-and-channel-load) |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
 | `persona` | `""` | The bot's personality, prepended to the fixed system prompt; see [Personality](#personality) |
@@ -518,8 +518,8 @@ reply, the radio has most likely stopped pushing messages; see the previous
 item.
 
 **Replies are cut off mid sentence.** The model is told to use 80 percent of
-the room and the hard cap trims the rest. Raising `reply_max_chars` costs
-airtime; lowering `max_tokens` shortens replies at the source.
+the room and the hard cap trims the rest. The default cap is already what
+the radio can carry; lowering `max_tokens` shortens replies at the source.
 
 **"channel N is empty on this radio".** The channel slot in `channel_idx` has
 no channel. Create it with the setup script or the app.

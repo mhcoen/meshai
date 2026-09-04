@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 from meshcore import EventType, MeshCore
 from meshcore.serial_cx import SerialConnection
+from serial import SerialException
 
 from bot import __version__
 from bot.backends import make_backend
@@ -67,6 +68,23 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
     )
 
 
+class ConnectError(RuntimeError):
+    """The serial port could not be opened at all (wrong path, unplugged, permissions)."""
+
+
+def _port_hint(port: str) -> str:
+    """Name the serial ports that do exist, so a wrong `port` setting is a one line fix."""
+    try:
+        from serial.tools import list_ports
+
+        found = [p.device for p in list_ports.comports() if "Bluetooth" not in p.device and "debug" not in p.device]
+    except Exception:  # noqa: BLE001
+        found = []
+    if found:
+        return "serial ports present: " + ", ".join(found) + ". Set `port` in config.toml (or MESHAI_PORT) to the radio."
+    return "no USB serial ports found. Is the radio plugged in? Check with: ls /dev/cu.* (macOS) or ls /dev/ttyUSB* /dev/ttyACM* (Linux)."
+
+
 def release_boot_lines(meshcore) -> None:
     """Drop DTR and RTS after opening the port.
 
@@ -95,7 +113,12 @@ async def connect(cfg: Config, attempts: int = 3, boot_delay_s: float = 2.5):
     """
     meshcore = MeshCore(SerialConnection(cfg.port, 115200))
     await meshcore.dispatcher.start()
-    if await meshcore.connection_manager.connect() is None:
+    try:
+        opened = await meshcore.connection_manager.connect()
+    except (SerialException, OSError) as exc:
+        await meshcore.disconnect()
+        raise ConnectError(f"cannot open {cfg.port}: {exc}\n{_port_hint(cfg.port)}") from None
+    if opened is None:
         await meshcore.disconnect()
         return None
     release_boot_lines(meshcore)
@@ -111,7 +134,11 @@ async def connect(cfg: Config, attempts: int = 3, boot_delay_s: float = 2.5):
 
 
 async def run(cfg: Config, headless: bool, log: EventLog) -> int:
-    meshcore = await connect(cfg)
+    try:
+        meshcore = await connect(cfg)
+    except ConnectError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if meshcore is None:
         print(
             f"error: no response from a MeshCore companion on {cfg.port} "

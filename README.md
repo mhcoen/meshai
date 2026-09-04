@@ -470,6 +470,12 @@ The API key for an OpenAI compatible backend comes only from the
 
 ## Troubleshooting
 
+**"cannot open /dev/...: No such file or directory".** The `port` setting
+does not match this computer. The message lists the serial ports it can see;
+pick the radio's and set `port` in `config.toml`. Port names differ between
+machines even for the same radio, and on Linux your user must be in the
+`dialout` group.
+
 **"no response from a MeshCore companion" on a radio that was working.**
 Boards with a CP2102 USB bridge and the usual ESP32 auto program circuit (the
 Heltec Wireless Paper is one) can end up in the serial bootloader. pyserial

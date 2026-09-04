@@ -35,7 +35,9 @@ _BIDI_RE = re.compile("[\u202a-\u202e\u2066-\u2069]")  # bidi controls
 def _build_confusable_table() -> dict[int, str]:
     """Map each non-ASCII character with an ASCII look-alike to that ASCII form."""
     try:
-        from confusables import CONFUSABLE_MAP
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)  # the package has an unescaped regex literal
+            from confusables import CONFUSABLE_MAP
     except ImportError:
         warnings.warn(
             "the 'confusables' package is not installed; homoglyph folding is disabled "

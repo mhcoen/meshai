@@ -62,7 +62,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 209 tests that need no radio, no model, and no network
+- 214 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -289,7 +289,9 @@ For a service or a screen session:
 ```
 
 Headless mode writes the JSON log to standard error, or to `--log-file PATH`
-or the `log_file` config key. `--debug` adds the meshcore library's frame
+or the `log_file` config key. `--check meshai.jsonl` reads a log and reports
+what the radio heard that the bot never received (see
+[Troubleshooting](#troubleshooting)). `--debug` adds the meshcore library's frame
 level log to `<log file>.debug`. Stop it with Ctrl-C or SIGTERM; the bot
 unsubscribes, stops message fetching, and closes the port.
 
@@ -618,6 +620,18 @@ look like this, and the JSON log tells them apart.
    received and then lost between the radio and the bot: the companion's
    message queue, the serial link, or the USB port. That is the case to
    report, with the `--debug` frame log from the same minute.
+
+The comparison in case 3 is built in:
+
+```bash
+.venv/bin/meshai --check meshai.jsonl
+```
+
+lists every message the radio heard from someone else that never produced
+an `inbound` record, with its RSSI and SNR, then the counts, the decisions
+taken, and the signal range of what was heard. The bot's own replies come
+back off the repeaters and are heard too; they are counted separately, not
+reported as losses.
 
 `rx_log = "all"` logs every packet of every type and channel, which is a
 lot on a busy mesh, for looking at coverage generally.

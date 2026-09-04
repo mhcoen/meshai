@@ -54,9 +54,9 @@ class Config:
     model_timeout_s: float = 30.0
 
     # [limits]
-    global_rate_per_min: float = 2.0
+    global_rate_per_min: float = 3.0
     global_burst: int = 1
-    sender_rate_per_min: float = 2.0
+    sender_rate_per_min: float = 3.0
     sender_burst: int = 1
 
     # [history]

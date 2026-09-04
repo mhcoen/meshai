@@ -29,9 +29,9 @@ max_tokens = 80
 model_timeout_s = 30.0            # hard asyncio timeout; on expiry the apology is posted
 
 [limits]
-global_rate_per_min = 2.0         # replies per minute across all senders (2 = one every 30 s)
+global_rate_per_min = 3.0         # replies per minute across all senders (3 = one every 20 s)
 global_burst = 1
-sender_rate_per_min = 2.0         # per sender name (spoofable; the global limit is the real ceiling)
+sender_rate_per_min = 3.0         # per sender name (spoofable; the global limit is the real ceiling)
 sender_burst = 1
 
 [adaptive]

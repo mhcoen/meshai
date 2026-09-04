@@ -16,7 +16,7 @@ history on disk.
 
 A live instance runs as MeshAI on the `#ai` channel of the MeshCore mesh in
 southern Wisconsin, centered on Madison. If you are on that mesh, add `#ai`
-in your MeshCore app and say something. It answers one message every 30
+in your MeshCore app and say something. It answers one message every 20
 seconds at most and backs off when the channel is busy, so a silence usually
 means the limit rather than a fault.
 
@@ -75,7 +75,7 @@ The radio needs the MeshCore companion USB firmware, a node name equal to
 
 - A Mac or Linux computer that stays on. This is a good use for an old
   laptop that is sitting in a drawer: the bot needs no screen once it is
-  running, and one reply every 30 seconds is not much work. The default model
+  running, and one reply every 20 seconds is not much work. The default model
   uses about 18 GB of memory; 32 GB of RAM is a comfortable minimum, 64 GB is
   better. Apple Silicon works well.
 - A MeshCore companion radio on USB. Built and tested with a Heltec Wireless
@@ -341,7 +341,7 @@ score and matched rules, when it was dropped. Decisions: `answered`,
 
 ## Rate limits and channel load
 
-The defaults allow one reply every 30 seconds overall and one every 30
+The defaults allow one reply every 20 seconds overall and one every 20
 seconds per sender name. Sender names are easy to forge, so the global limit
 is the one that matters.
 
@@ -349,8 +349,9 @@ A LoRa channel is shared by everyone in range, and every channel message is
 repeated by every repeater that hears it. On the USA preset a 100 character
 reply is roughly half a second of airtime per transmission; a question plus a
 reply, each repeated by three repeaters, is close to three seconds of local
-airtime. At one exchange every 30 seconds that is about 9 percent of the
-channel, which is fine on a quiet mesh. Sustained load past about 15 to 20
+airtime. At one exchange every 20 seconds that is about 13 percent of the
+channel, which is fine on a quiet mesh; at one every 30 seconds it is about
+9 percent. Sustained load past about 15 to 20
 percent is where uncoordinated senders start colliding and losing packets.
 On a busy or shared regional mesh, one reply per minute
 (`global_rate_per_min = 1.0`) is the considerate setting, and a shorter
@@ -408,9 +409,9 @@ any key may appear in any section.
 | `temperature` | `0.6` | Sampling temperature |
 | `max_tokens` | `80` | Output token limit |
 | `model_timeout_s` | `30.0` | Hard timeout on the model call |
-| `global_rate_per_min` | `2.0` | Replies per minute across all senders |
+| `global_rate_per_min` | `3.0` | Replies per minute across all senders |
 | `global_burst` | `1` | Global bucket size |
-| `sender_rate_per_min` | `2.0` | Replies per minute per sender name |
+| `sender_rate_per_min` | `3.0` | Replies per minute per sender name |
 | `sender_burst` | `1` | Per sender bucket size |
 | `adaptive_enabled` | `true` | Scale the global rate by channel load |
 | `utilization_poll_s` | `10.0` | Seconds between radio statistics polls |

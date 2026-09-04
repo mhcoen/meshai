@@ -14,6 +14,12 @@ can reach the model or the radio.
 It is a small Python package with no web interface, no database, and no
 history on disk.
 
+A live instance runs as MeshAI on the `#ai` channel of the MeshCore mesh in
+southern Wisconsin, centered on Madison. If you are on that mesh, add `#ai`
+in your MeshCore app and say something. It answers one message every 30
+seconds at most and backs off when the channel is busy, so a silence usually
+means the limit rather than a fault.
+
 ## Features
 
 - Answers on one MeshCore channel, optionally only to messages with a prefix

@@ -53,7 +53,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 155 tests that need no radio, no model, and no network
+- 162 tests that need no radio, no model, and no network
 
 ## Quick start
 

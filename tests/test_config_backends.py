@@ -26,7 +26,7 @@ def test_defaults_match_the_agreed_setup():
     assert cfg.persona_timeout_min == 120 and cfg.command_prefix == "/"
     assert cfg.adaptive_enabled is True
     assert (cfg.duty_low, cfg.duty_high, cfg.tx_duty_budget) == (0.05, 0.15, 0.02)
-    assert (cfg.utilization_poll_s, cfg.utilization_window_s) == (10.0, 60.0)
+    assert (cfg.utilization_poll_s, cfg.utilization_window_s) == (10.0, 120.0)
 
 
 def test_sections_are_flattened_and_env_overrides_win():

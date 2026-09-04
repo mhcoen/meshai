@@ -6,10 +6,13 @@ Signals, all from the companion via the library:
                        last_rssi, last_snr
   get_stats_packets -> recv, sent, flood_rx, flood_tx, direct_rx, direct_tx (cumulative)
 
-Duty cycle over the window = (delta tx_air + delta rx_air) / elapsed. Airtime is what this
-radio heard or sent, so a busy channel it cannot hear does not register; that is inherent
-to a node-local measurement. Counters are integer seconds, so with a 60 s window the
-resolution is about 1.7 percentage points.
+Duty cycle over the window = delta rx_air / elapsed: received airtime only. The bot's own
+transmissions are exactly what the base rate limit governs, so counting them here would
+make the limiter fight itself (one exchange looked like 20% over a fresh 10 s window).
+Transmit airtime is still reported. Airtime is what this radio heard, so a busy channel
+it cannot hear does not register; that is inherent to a node-local measurement. Counters
+are integer seconds, so with a 60 s window the resolution is about 1.7 percentage points.
+No level change is made until the window holds at least half of ``window_s`` of data.
 
 Policy with hysteresis:
   duty <  duty_low                -> "full"   factor 1.0
@@ -53,7 +56,8 @@ class Sample:
 
 @dataclass(frozen=True)
 class Utilization:
-    duty: float
+    duty: float            # received airtime / elapsed
+    tx_duty: float         # this radio's own transmit airtime / elapsed (reported, not acted on)
     packets_per_min: float
     window_s: float
     noise_floor: int | None
@@ -166,15 +170,19 @@ class UtilizationMonitor:
         elapsed = sample.t - oldest.t
         if elapsed <= 0:
             return self.current  # first sample: nothing to compare yet
-        air = (sample.tx_air - oldest.tx_air) + (sample.rx_air - oldest.rx_air)
-        duty = min(1.0, max(0.0, air / elapsed))
+        duty = min(1.0, max(0.0, (sample.rx_air - oldest.rx_air) / elapsed))
+        tx_duty = min(1.0, max(0.0, (sample.tx_air - oldest.tx_air) / elapsed))
         ppm = ((sample.recv - oldest.recv) + (sample.sent - oldest.sent)) / elapsed * 60.0
 
-        level = next_level(duty, self.level, self.duty_low, self.duty_high)
+        if elapsed >= self.window_s * 0.5:
+            level = next_level(duty, self.level, self.duty_low, self.duty_high)
+        else:
+            level = self.level  # too little data to act on yet
         changed = level != self.level
         self._set_level(level, duty)
         self.current = Utilization(
             duty=duty,
+            tx_duty=tx_duty,
             packets_per_min=ppm,
             window_s=elapsed,
             noise_floor=sample.noise_floor,
@@ -186,6 +194,7 @@ class UtilizationMonitor:
         self.log.emit(
             "utilization",
             duty=round(duty, 4),
+            tx_duty=round(tx_duty, 4),
             packets_per_min=round(ppm, 2),
             window_s=round(elapsed, 1),
             noise_floor=sample.noise_floor,

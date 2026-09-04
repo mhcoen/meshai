@@ -121,7 +121,7 @@ class MeshAIApp(App[None]):
         if u is None:
             return head + f"(warming up, polls {m.polls}, errors {m.errors})"
         return head + (
-            f"duty cycle  {u.duty:.1%} over {u.window_s:.0f}s\n"
+            f"rx duty     {u.duty:.1%} over {u.window_s:.0f}s   own tx {u.tx_duty:.1%}\n"
             f"packets     {u.packets_per_min:.1f}/min\n"
             f"noise floor {u.noise_floor} dBm  rssi {u.last_rssi}  snr {u.last_snr}\n"
             f"polls {m.polls}  errors {m.errors}"

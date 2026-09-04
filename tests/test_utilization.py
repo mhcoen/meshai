@@ -70,7 +70,8 @@ class StatsMeshCore(FakeMeshCore):
         )
 
 
-def make_monitor(clock, window_s=60.0, poll_s=10.0):
+def make_monitor(clock, window_s=20.0, poll_s=10.0):
+    """Default window of 20 s means the policy acts once 10 s of data are in hand."""
     mc = StatsMeshCore()
     limiter = RateLimiter(2.0, 1, 2.0, 1, clock=clock)
     records = []
@@ -87,36 +88,64 @@ async def test_first_sample_has_nothing_to_compare():
     assert mon.level == "full" and limiter.global_factor == 1.0
 
 
-async def test_duty_cycle_and_packets_per_minute_over_the_window():
+async def test_duty_cycle_is_received_airtime_only_and_tx_is_reported():
     clock = FakeClock()
     mc, limiter, mon, records = make_monitor(clock)
     await mon.sample()
     clock.advance(10)
-    mc.tx_air, mc.rx_air, mc.recv, mc.sent = 1, 1, 4, 1  # 2 s airtime in 10 s = 20%
+    mc.tx_air, mc.rx_air, mc.recv, mc.sent = 1, 2, 4, 1  # 2 s heard, 1 s sent, in 10 s
     u = await mon.sample()
     assert u.duty == pytest.approx(0.2)
+    assert u.tx_duty == pytest.approx(0.1)
     assert u.packets_per_min == pytest.approx(30.0)
     assert u.window_s == pytest.approx(10.0)
     assert (u.noise_floor, u.last_rssi, u.last_snr) == (-110, -85, 7.5)
     assert u.level == "paused" and u.factor == 0.0
     assert limiter.global_factor == 0.0
     rec = [r for r in records if r["event"] == "utilization"][-1]
-    assert rec["level"] == "paused" and rec["level_changed"] is True
+    assert rec["level"] == "paused" and rec["level_changed"] is True and rec["tx_duty"] == 0.1
     assert any(r["event"] == "rate_level" and (r["old"], r["new"]) == ("full", "paused") for r in records)
+
+
+async def test_own_transmissions_never_throttle_the_bot():
+    clock = FakeClock()
+    mc, limiter, mon, records = make_monitor(clock)
+    await mon.sample()
+    clock.advance(10)
+    mc.tx_air = 5  # 50% of the window is our own TX; nothing heard
+    u = await mon.sample()
+    assert u.duty == 0.0 and u.tx_duty == pytest.approx(0.5)
+    assert u.level == "full" and limiter.global_factor == 1.0
+
+
+async def test_no_action_until_half_the_window_is_in_hand():
+    clock = FakeClock()
+    mc, limiter, mon, records = make_monitor(clock, window_s=60.0)  # acts only from 30 s of data
+    await mon.sample()
+    clock.advance(10)
+    mc.rx_air = 2  # 20% over 10 s: would pause, but the window is too short to trust
+    u = await mon.sample()
+    assert u.duty == pytest.approx(0.2)
+    assert u.level == "full" and limiter.global_factor == 1.0
+    clock.advance(10)
+    assert (await mon.sample()).level == "full"  # 20 s: still waiting
+    clock.advance(10)
+    u = await mon.sample()  # 30 s of data: 2 s / 30 s = 6.7% -> half
+    assert u.level == "half" and limiter.global_factor == 0.5
 
 
 async def test_window_slides_and_old_samples_drop_out():
     clock = FakeClock()
-    mc, limiter, mon, records = make_monitor(clock, window_s=30.0, poll_s=10.0)
+    mc, limiter, mon, records = make_monitor(clock, window_s=20.0, poll_s=10.0)
     await mon.sample()
     clock.advance(10)
     mc.rx_air = 5  # a 5 s burst: 50% over the first 10 s
     assert (await mon.sample()).level == "paused"
-    for _ in range(5):  # quiet for 50 s; the burst leaves the 30 s window
+    for _ in range(5):  # quiet for 50 s; the burst leaves the 20 s window
         clock.advance(10)
         u = await mon.sample()
     assert u.duty == pytest.approx(0.0)
-    assert u.window_s <= 30.0
+    assert u.window_s <= 20.0
 
 
 async def test_relaxes_one_level_per_poll_with_hysteresis():

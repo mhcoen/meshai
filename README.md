@@ -121,9 +121,13 @@ With `adaptive_enabled = true` (the default) a monitor task polls the radio
 every `utilization_poll_s` seconds for its cumulative airtime counters
 (`get_stats_radio`: transmit and receive seconds, noise floor, last RSSI/SNR)
 and packet counters (`get_stats_packets`). Over a sliding
-`utilization_window_s` window it computes the channel duty cycle, airtime
-divided by elapsed time, and packets per minute, and scales the **global**
-reply rate:
+`utilization_window_s` window it computes the channel duty cycle, *received*
+airtime divided by elapsed time, and packets per minute, and scales the
+**global** reply rate. The bot's own transmit airtime is reported alongside but
+not counted: the base rate limit already governs it, and counting it made the
+limiter fight itself. No level change is made until the window holds at least
+half of `utilization_window_s` of data, so a single exchange right after
+startup cannot read as a busy channel.
 
 | duty cycle | level | global rate |
 |---|---|---|

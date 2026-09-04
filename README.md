@@ -40,6 +40,8 @@ channel utilisation, and every message with the bot's decision on it:
 - Prompt injection gate at four points: each channel line, the prompt, the
   assembled context, and the reply
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
+- Any personality you like: the `persona` line in `config.toml` is prepended
+  to the system prompt, and the example config ships with a sarcastic one
 - Dynamically reduces its own traffic when the network is congested: it reads
   the radio's airtime counters, halves its reply rate when the channel gets
   busy, and stops replying until the channel clears
@@ -385,7 +387,7 @@ any key may appear in any section.
 | `reply_max_chars` | `100` | Cap on the whole outbound message, prefix included |
 | `prompt_max_chars` | `140` | Longer prompts are dropped |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
-| `persona` | `""` | Optional text prepended to the fixed system prompt |
+| `persona` | `""` | The bot's personality, prepended to the fixed system prompt; see [Personality](#personality) |
 | `backend` | `ollama` | `ollama` or `openai` |
 | `model` | `qwen3:30b-a3b-instruct-2507-q4_K_M` | Model name for the backend |
 | `ollama_host` | `http://127.0.0.1:11434` | Ollama server |
@@ -409,8 +411,22 @@ any key may appear in any section.
 | `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |
 | `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshai.jsonl` (monitor) |
 
-The example config ships with a persona that gives the bot a sarcastic
-streak. Clear it for a plain assistant.
+### Personality
+
+The bot's voice is one line in `config.toml`:
+
+```toml
+[bot]
+persona = "Personality: a sarcastic smart aleck. Lead with a dry, deadpan jab or an eye-roll in nearly every reply, tease the question and the questioner, stay clever rather than cruel, and always bury the real answer in there. Any joke must be a one-liner with the punchline included."
+```
+
+That text goes in front of the fixed system prompt, which handles the
+mechanics (one sentence, the character budget, plain text, and ignoring
+instructions found in channel history) and is not configurable. Write the
+persona however you want: a helpful assistant, a pirate, a weather bore, a
+ham radio old-timer. Set it to `""` for a plain assistant. `temperature`
+matters too: 0.3 gives flat and reliable, 0.6 (the default) gives the persona
+room, above 0.8 gets loose. Restart the bot after changing either.
 
 ## Security
 

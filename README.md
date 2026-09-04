@@ -22,9 +22,11 @@ means the limit rather than a fault.
 
 ## Screenshots
 
-What people on the channel see, in the MeshCore app:
+What people on the channel see, in the MeshCore app on your phone:
 
-<img src="docs/phone.png" width="260" alt="The #ai channel in the MeshCore app, with two replies from MeshAI">
+<p align="center">
+  <img src="docs/phone.png" width="260" alt="The #ai channel in the MeshCore app, with two replies from MeshAI">
+</p>
 
 What you see, in the terminal monitor: radio and channel state, rate limits,
 channel utilisation, and every message with the bot's decision on it:

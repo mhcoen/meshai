@@ -62,7 +62,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 205 tests that need no radio, no model, and no network
+- 209 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -460,6 +460,7 @@ any key may appear in any section.
 | `history_size` | `20` | Channel lines kept in memory |
 | `transcript_max_chars` | `1500` | Size of the transcript given to the model |
 | `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |
+| `rx_log` | `channel` | Log packets the radio hears: `off`, `channel` (the served channel), or `all` |
 | `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshai.jsonl` (monitor) |
 
 ### Personalities
@@ -585,6 +586,28 @@ replies are going out while repeaters are still rebroadcasting the question
 and are lost to collisions. Make sure `reply_delay_s` is not zero; on a mesh
 with many repeaters or long hop counts raise it to 8 or 10. Shorter replies
 (`reply_max_chars`) also survive better.
+
+**The bot misses messages that my own node hears.** Three different things
+look like this, and the JSON log tells them apart.
+
+1. It was not missed, it was dropped. Look for an `inbound` record at that
+   time with `dropped:rate-limited` or `dropped:injection-blocked`. The bot
+   never answers two messages closer than the burst floor.
+2. The radio never heard it. With `rx_log = "channel"` (the default) the
+   bot writes an `rx` record for every packet the radio hears on the served
+   channel, decrypted, with RSSI, SNR, and hop count, whether or not a
+   message was delivered. No `rx` record and no `inbound` record means the
+   packet never reached the radio: range, placement, or the radio's own
+   transmission at that moment, since it cannot hear while it sends. Compare
+   RSSI and SNR on the messages it does hear with what your node reports.
+3. The radio heard it and the computer did not get it. An `rx` record with
+   the message text but no `inbound` record for it means the packet was
+   received and then lost between the radio and the bot: the companion's
+   message queue, the serial link, or the USB port. That is the case to
+   report, with the `--debug` frame log from the same minute.
+
+`rx_log = "all"` logs every packet of every type and channel, which is a
+lot on a busy mesh, for looking at coverage generally.
 
 **The bot answered once and then went quiet.** Look at the JSON log. A
 `dropped:rate-limited` line means the second message came inside the limit; a

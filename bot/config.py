@@ -26,6 +26,7 @@ API_KEY_ENV = "MESHAI_OPENAI_API_KEY"
 WIRE_TEXT_MAX = 160
 
 BACKENDS = ("ollama", "openai")
+RX_LOG_MODES = ("off", "channel", "all")
 THINK_MODES = ("off", "on", "omit")
 
 
@@ -102,6 +103,7 @@ class Config:
 
     # [logging]
     log_file: str = ""
+    rx_log: str = "channel"  # "off" | "channel" (packets on the served channel) | "all" (every packet heard)
 
     def validate(self) -> "Config":
         errors: list[str] = []
@@ -113,6 +115,8 @@ class Config:
             errors.append("bot_name must not be empty")
         if self.backend not in BACKENDS:
             errors.append(f"backend must be one of {BACKENDS}")
+        if self.rx_log not in RX_LOG_MODES:
+            errors.append(f"rx_log must be one of {RX_LOG_MODES}")
         if self.ollama_think not in THINK_MODES:
             errors.append(f"ollama_think must be one of {THINK_MODES}")
         if not self.model:

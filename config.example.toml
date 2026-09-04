@@ -64,6 +64,7 @@ transcript_max_chars = 1500       # rendered transcript budget; truncated from t
 injection_threshold = 0.45           # block a message when its injection score is at or above this
 
 [logging]
+rx_log = "channel"                # "off" | "channel" | "all": log what the radio hears (see README, troubleshooting)
 log_file = ""                     # "" = JSON lines to stderr; otherwise appended to this path
 
 # Named personalities. Anyone on the channel can switch with /<name>; only this text ever

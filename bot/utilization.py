@@ -23,9 +23,13 @@ Two policies run on the same level ladder, and the more restrictive one wins:
     tx_duty <  budget               -> "full"
     budget <= tx_duty < 2 * budget  -> "half"
     tx_duty >= 2 * budget           -> "paused"
-Tightening happens as soon as a threshold is crossed. Relaxing happens one level per
-poll and only once the duty has fallen below 80% of the threshold that level guards,
-so a channel hovering at a threshold does not flap.
+The counters are whole seconds, so over a window of W seconds the duty cycle moves in
+steps of 1/W; with a 60 s window that is 1.7 points, and a threshold that sits on a step
+flaps with every second of airtime. Two things keep the level steady: the window is
+long (120 s by default), and a level only changes after consecutive polls agree.
+Tightening needs TIGHTEN_POLLS polls in a row above a threshold; relaxing needs
+RELAX_POLLS polls in a row below RELAX_MARGIN of the threshold that level guards, and
+goes one level at a time.
 """
 
 from __future__ import annotations
@@ -44,7 +48,9 @@ from bot.ratelimit import RateLimiter
 
 LEVELS = ("full", "half", "paused")
 FACTORS = {"full": 1.0, "half": 0.5, "paused": 0.0}
-RELAX_MARGIN = 0.8
+RELAX_MARGIN = 0.6  # relax only once duty is well under the threshold, not one second under it
+TIGHTEN_POLLS = 2  # consecutive polls over a threshold before tightening
+RELAX_POLLS = 3  # consecutive polls under the relax point before relaxing one level
 
 
 @dataclass(frozen=True)
@@ -73,16 +79,40 @@ class Utilization:
     reason: str = ""  # "rx" when received traffic set the level, "tx" when the bot's own budget did
 
 
-def next_level(duty: float, current: str, duty_low: float, duty_high: float) -> str:
-    """Pure policy step: where to go from ``current`` given this window's duty cycle."""
-    target = "paused" if duty >= duty_high else "half" if duty >= duty_low else "full"
+def target_level(duty: float, duty_low: float, duty_high: float) -> str:
+    return "paused" if duty >= duty_high else "half" if duty >= duty_low else "full"
+
+
+def next_level(
+    duty: float, current: str, duty_low: float, duty_high: float, over: int = TIGHTEN_POLLS, under: int = RELAX_POLLS
+) -> str:
+    """Pure policy step given the streak counts: ``over`` consecutive polls with the target
+    above ``current``, ``under`` consecutive polls below the relax point of ``current``."""
+    target = target_level(duty, duty_low, duty_high)
     cur_i, tgt_i = LEVELS.index(current), LEVELS.index(target)
-    if tgt_i >= cur_i:
-        return target  # tighten immediately (or stay)
-    guard = duty_high if current == "paused" else duty_low
-    if duty < guard * RELAX_MARGIN:
-        return LEVELS[cur_i - 1]  # relax one step
+    if tgt_i > cur_i:
+        return target if over >= TIGHTEN_POLLS else current
+    if tgt_i < cur_i:
+        guard = duty_high if current == "paused" else duty_low
+        if duty < guard * RELAX_MARGIN and under >= RELAX_POLLS:
+            return LEVELS[cur_i - 1]
     return current
+
+
+class Streaks:
+    """Consecutive-poll counters for one policy (rx or tx)."""
+
+    def __init__(self) -> None:
+        self.over = 0
+        self.under = 0
+
+    def update(self, duty: float, current: str, low: float, high: float) -> tuple[int, int]:
+        target = target_level(duty, low, high)
+        cur_i, tgt_i = LEVELS.index(current), LEVELS.index(target)
+        self.over = self.over + 1 if tgt_i > cur_i else 0
+        guard = high if current == "paused" else low
+        self.under = self.under + 1 if (tgt_i < cur_i and duty < guard * RELAX_MARGIN) else 0
+        return self.over, self.under
 
 
 class UtilizationMonitor:
@@ -108,6 +138,8 @@ class UtilizationMonitor:
         self.tx_budget = tx_budget
         self._clock = clock
         self._samples: deque[Sample] = deque()
+        self._rx_streak = Streaks()
+        self._tx_streak = Streaks()
         self.level = "full"
         self.current: Utilization | None = None
         self.polls = 0
@@ -184,10 +216,25 @@ class UtilizationMonitor:
 
         reason = ""
         if elapsed >= self.window_s * 0.5:
-            rx_level = next_level(duty, self.level, self.duty_low, self.duty_high)
-            tx_level = next_level(tx_duty, self.level, self.tx_budget, 2.0 * self.tx_budget)
-            level = max(rx_level, tx_level, key=LEVELS.index)
-            reason = "tx" if LEVELS.index(tx_level) > LEVELS.index(rx_level) else "rx"
+            rx_over, rx_under = self._rx_streak.update(duty, self.level, self.duty_low, self.duty_high)
+            tx_over, tx_under = self._tx_streak.update(tx_duty, self.level, self.tx_budget, 2.0 * self.tx_budget)
+            rx_level = next_level(duty, self.level, self.duty_low, self.duty_high, rx_over, rx_under)
+            tx_level = next_level(tx_duty, self.level, self.tx_budget, 2.0 * self.tx_budget, tx_over, tx_under)
+            # Tighten if either policy says so; relax only when both agree the level can drop.
+            cur = LEVELS.index(self.level)
+            rx_i, tx_i = LEVELS.index(rx_level), LEVELS.index(tx_level)
+            if max(rx_i, tx_i) > cur:
+                level = LEVELS[max(rx_i, tx_i)]
+                reason = "tx" if tx_i > rx_i else "rx"
+            elif rx_i < cur and tx_i < cur:
+                level = LEVELS[cur - 1]
+                reason = "rx" if rx_i >= tx_i else "tx"
+            else:
+                level = self.level
+                reason = "rx" if rx_i >= tx_i else "tx"
+            if level != self.level:
+                self._rx_streak = Streaks()
+                self._tx_streak = Streaks()
         else:
             level = self.level  # too little data to act on yet
         changed = level != self.level

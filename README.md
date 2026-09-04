@@ -62,7 +62,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 214 tests that need no radio, no model, and no network
+- 210 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -365,9 +365,9 @@ There is one dial: `tx_duty_budget`, the fraction of the channel's time the
 bot may occupy with its own transmissions, 0.02 by default. The monitor reads
 the radio's transmit airtime counter every `utilization_poll_s` seconds,
 works out the bot's own duty cycle over the last `utilization_window_s`, and
-steps the reply rate down as soon as it reaches the budget: halved at the
-budget, paused at twice it, relaxed one step per poll with hysteresis once
-it drops back. That makes "we use at most 2 percent of the channel" a
+steps the reply rate down when it reaches the budget: halved at the
+budget, paused at twice it, relaxed one step at a time once it drops well
+back. That makes "we use at most 2 percent of the channel" a
 statement the log can back up, and turning it down is one line in
 `config.toml`.
 
@@ -405,11 +405,19 @@ received duty cycle, other people's airtime, over the same window:
 | `duty_low` to `duty_high` | half | configured x 0.5 |
 | at or above `duty_high` | paused | no replies |
 
-The two policies share one ladder and the more restrictive one wins; the
-`utilization` and `rate_level` log records say which (`tx` or `rx`). No
-decision is made until at least half a window of data is in hand, and
-airtime is what this radio hears, so traffic it cannot hear does not
-register.
+The two policies share one ladder; either can tighten it and both must
+agree before it relaxes. The `utilization` and `rate_level` log records say
+which (`tx` or `rx`).
+
+The radio's airtime counters are whole seconds, so over a window of W
+seconds the duty cycle moves in steps of 1/W, and a threshold that sits on a
+step would flip with every second of airtime. Two things keep the level
+steady: the window is 120 seconds, so one second is under a point, and a
+level changes only when consecutive polls agree, two in a row over a
+threshold to tighten, three in a row under 60 percent of the threshold to
+relax one step. No decision is made until at least half a window of data is
+in hand, and airtime is what this radio hears, so traffic it cannot hear
+does not register.
 
 ## Configuration reference
 
@@ -455,7 +463,7 @@ any key may appear in any section.
 | `fortune_fallback` | `The mesh is quiet this morning, and so is your fortune.` | Posted if the fortune will not fit after the retries |
 | `adaptive_enabled` | `true` | Scale the global rate by channel load |
 | `utilization_poll_s` | `10.0` | Seconds between radio statistics polls |
-| `utilization_window_s` | `60.0` | Window for the duty cycle |
+| `utilization_window_s` | `120.0` | Window for the duty cycle |
 | `duty_low` | `0.05` | Receive duty cycle at which the rate is halved |
 | `duty_high` | `0.15` | Receive duty cycle at which replies pause |
 | `tx_duty_budget` | `0.02` | The dial: share of channel time for the bot's own transmissions |

@@ -36,11 +36,8 @@ channel utilisation, and every message with the bot's decision on it:
 
 ## Features
 
-- Serves one MeshCore channel and answers every message on it. A trigger
-  prefix is available for shared channels and is off by default: with
-  `trigger_prefix = "!ai "` in the config, only messages that begin with an
-  exclamation mark followed by ai and a space get an answer, and the rest
-  are ignored
+- Answers every message on one MeshCore channel. On a shared channel, an
+  optional trigger prefix such as `!ai` limits it to messages meant for it
 - Local model through Ollama, or any OpenAI compatible chat endpoint
 - One sentence replies, plain ASCII, one byte per character on the air, capped
   at 150 characters, which is all the radio will carry

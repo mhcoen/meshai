@@ -24,9 +24,10 @@ history on disk.
 - Prompt injection gate at four points: each channel line, the prompt, the
   assembled context, and the reply
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
-- Token bucket rate limits, global and per sender, plus an adaptive limiter
-  that reads the radio's airtime counters and slows down when the channel is
-  busy
+- Dynamically reduces its own traffic when the network is congested: it reads
+  the radio's airtime counters, halves its reply rate when the channel gets
+  busy, and stops replying until the channel clears
+- Token bucket rate limits, global and per sender name
 - Bounded in memory history rendered to the model as untrusted background,
   never as prior chat turns
 - Terminal monitor with a live message log, rate limiter state, channel

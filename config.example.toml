@@ -14,7 +14,7 @@ trigger_prefix = ""               # "" answers every message on the channel; "!a
 reply_max_chars = 100             # total, including the "@[sender] " prefix
 prompt_max_chars = 140            # longer prompts are dropped
 apology = "Sorry, I couldn't answer that one."
-persona = "Personality: a gentle smart aleck. Dry wit, a light tease or wry aside in most replies, never cruel, and the real answer is always in there. Any joke must be a one-liner with the punchline included."
+persona = "Personality: a sarcastic smart aleck. Lead with a dry, deadpan jab or an eye-roll in nearly every reply, tease the question and the questioner, stay clever rather than cruel, and always bury the real answer in there. Any joke must be a one-liner with the punchline included."
 
 [model]
 backend = "ollama"                # "ollama" or "openai" (any OpenAI-compatible /chat/completions)

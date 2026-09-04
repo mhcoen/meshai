@@ -108,8 +108,9 @@ class FakeMeshCore:
 class FakeBackend:
     name = "fake"
 
-    def __init__(self, reply: str = "Four.", delay: float = 0.0, error: Exception | None = None):
+    def __init__(self, reply: str = "Four.", delay: float = 0.0, error: Exception | None = None, replies: list[str] | None = None):
         self.reply = reply
+        self.replies = list(replies) if replies else None  # served in order; the last one repeats
         self.delay = delay
         self.error = error
         self.calls: list[list[dict[str, str]]] = []
@@ -121,6 +122,8 @@ class FakeBackend:
             await asyncio.sleep(self.delay)
         if self.error is not None:
             raise self.error
+        if self.replies:
+            return self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
         return self.reply
 
     async def aclose(self) -> None:

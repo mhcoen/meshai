@@ -19,7 +19,7 @@ from bot.service import Stats
 class MeshAIApp(App[None]):
     TITLE = "MeshAI"
     CSS = """
-    Horizontal#top { height: 10; }
+    Horizontal#top { height: 11; }
     #status, #limits, #util { width: 1fr; border: round $primary; padding: 0 1; }
     #log { border: round $secondary; height: 1fr; }
     """
@@ -90,7 +90,8 @@ class MeshAIApp(App[None]):
             f"         last latency {latency}\n"
             f"[b]Counts[/b]  in {s.received}  replies {s.replies_sent}  apologies {s.apologies_sent}\n"
             f"         injection-blocked {s.injection_blocks}  rate-limited {s.rate_limited}\n"
-            f"         send-err {s.send_errors}  model-err {s.model_errors}"
+            f"         send-err {s.send_errors}  model-err {s.model_errors}\n"
+            f"         shorten-retries {s.shorten_retries}  too-long-fallbacks {s.fallbacks_sent}"
         )
         snap = self._limiter.snapshot()
         senders = "\n".join(
@@ -137,7 +138,7 @@ class MeshAIApp(App[None]):
                 extra = f" [{record.get('point')} score={record.get('injection_score')} {record.get('injection_rules')}]"
             elif decision == "dropped:rate-limited":
                 extra = f" [{record.get('reason')}]"
-            elif decision in ("answered", "apology"):
+            elif decision in ("answered", "answered:too-long-fallback", "apology"):
                 extra = f" -> {record.get('reply')}"
             line = (
                 f"{ts} {record.get('sender', '?')!s:<16} hops={record.get('path_len')} "
@@ -147,7 +148,7 @@ class MeshAIApp(App[None]):
             line = f"{ts} [rate] {record.get('old')} -> {record.get('new')} at duty {record.get('duty')}"
         elif event in (
             "startup", "shutdown", "connected", "disconnected", "send_error", "injection_block",
-            "shutdown_error", "utilization_error",
+            "shutdown_error", "utilization_error", "reply_too_long",
         ):
             details = {k: v for k, v in record.items() if k not in ("ts", "event")}
             line = f"{ts} [{event}] {details}"

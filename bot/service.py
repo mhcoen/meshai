@@ -36,6 +36,7 @@ from bot.reply import compose_reply, shape_reply
 
 class Decision(str, Enum):
     ANSWERED = "answered"
+    ANSWERED_FALLBACK = "answered:too-long-fallback"
     APOLOGY = "apology"
     DROP_LOOP_GUARD = "dropped:loop-guard"
     DROP_NO_TRIGGER = "dropped:no-trigger"
@@ -63,6 +64,8 @@ class Stats:
     rate_limited: int = 0
     send_errors: int = 0
     model_errors: int = 0
+    shorten_retries: int = 0
+    fallbacks_sent: int = 0
     last_latency_ms: float | None = None
     last_decision: str = ""
     started_at: float = field(default_factory=time.time)
@@ -273,10 +276,32 @@ class BotService:
         budget = max(1, int((cfg.reply_max_chars - prefix_len) * 0.8))
         messages = build_messages(cfg.bot_name, budget, transcript, prompt, cfg.persona)
 
-        # Model, under a hard timeout.
+        # Model, under a hard timeout per call. A reply that does not fit goes back to the
+        # model with the exact limit; nothing is ever cut mid-sentence.
+        available = cfg.reply_max_chars - prefix_len
         started = self._clock()
+        retries = 0
+        fallback = False
         try:
             raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
+            shaped = shape_reply(raw)
+            while len(shaped) > available and retries < cfg.shorten_retries:
+                retries += 1
+                self.stats.shorten_retries += 1
+                target = available if retries == 1 else max(20, int(available * 0.7))
+                messages = messages + [
+                    {"role": "assistant", "content": shaped},
+                    {
+                        "role": "user",
+                        "content": (
+                            f"That reply was {len(shaped)} characters. The hard limit is {available} characters "
+                            f"including spaces. Rewrite it as one plain sentence of at most {target} characters "
+                            "that keeps the answer. Reply with the sentence only."
+                        ),
+                    },
+                ]
+                raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
+                shaped = shape_reply(raw)
             latency_ms = round((self._clock() - started) * 1000.0, 1)
             self.stats.last_latency_ms = latency_ms
         except asyncio.TimeoutError:
@@ -288,7 +313,11 @@ class BotService:
             return await self._send_apology(parsed, path_len, received_at, reason=f"{type(exc).__name__}: {exc}")
 
         # Outbound.
-        shaped = shape_reply(raw)
+        if len(shaped) > available:
+            fallback = True
+            self.stats.fallbacks_sent += 1
+            self.log.emit("reply_too_long", sender=parsed.sender, length=len(shaped), limit=available, retries=retries)
+            shaped = cfg.too_long_reply
         out_verdict = self.gate.check(shaped)
         if out_verdict.blocked:
             self.stats.injection_blocks += 1
@@ -307,10 +336,11 @@ class BotService:
             return self._record(parsed, path_len, Decision.DROP_EMPTY, latency_ms=latency_ms)
 
         held_ms = await self._hold_for_quiet_channel(received_at)
+        decision = Decision.ANSWERED_FALLBACK if fallback else Decision.ANSWERED
         if await self._send(reply):
             self.stats.replies_sent += 1
             return self._record(
-                parsed, path_len, Decision.ANSWERED, reply=reply, latency_ms=latency_ms, held_ms=held_ms
+                parsed, path_len, decision, reply=reply, latency_ms=latency_ms, held_ms=held_ms, retries=retries
             )
         return self._record(parsed, path_len, Decision.DROP_SEND_FAILED, reply=reply, latency_ms=latency_ms)
 

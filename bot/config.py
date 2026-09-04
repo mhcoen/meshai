@@ -42,6 +42,8 @@ class Config:
     reply_max_chars: int = 150
     prompt_max_chars: int = 160
     reply_delay_s: float = 6.0
+    shorten_retries: int = 2
+    too_long_reply: str = "That answer will not fit in one message, ask me something narrower."
     apology: str = "Sorry, I couldn't answer that one."
     persona: str = ""
 
@@ -103,6 +105,10 @@ class Config:
             )
         if self.prompt_max_chars <= 0:
             errors.append("prompt_max_chars must be positive")
+        if self.shorten_retries < 0:
+            errors.append("shorten_retries must not be negative")
+        if not self.too_long_reply.strip():
+            errors.append("too_long_reply must not be empty")
         if self.reply_delay_s < 0:
             errors.append("reply_delay_s must not be negative")
         if self.model_timeout_s <= 0:

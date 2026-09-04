@@ -328,14 +328,19 @@ part is whatever the sending node put there; nothing verifies it.
     riddle keeps its punchline.
 11. **Injection check, reply.** If it is flagged nothing is sent, not even the
     apology.
-12. **Cap and send.** `@[sender] ` plus the text, cut to `reply_max_chars`
-    in total. The prefix is never cut; if a very long sender name leaves no
-    room, nothing is sent. A send failure is logged and not retried.
+12. **Fit.** If the shaped reply is longer than the room left after
+    `@[sender] `, it goes back to the model with its length and the exact
+    limit, up to `shorten_retries` times, the second time with a tighter
+    target. If it still does not fit, the fixed `too_long_reply` line is sent
+    instead. Model output is never cut mid-sentence.
+13. **Send.** `@[sender] ` plus the text. A send failure is logged and not
+    retried. Only a sender name so long that nothing fits after the prefix
+    results in no message at all.
 
 Every inbound message produces one `inbound` record in the JSON log with
 `sender`, `prompt`, `path_len`, `decision`, and the reason, or the injection
 score and matched rules, when it was dropped. Decisions: `answered`,
-`apology`, `dropped:loop-guard`, `dropped:no-trigger`, `dropped:too-long`,
+`answered:too-long-fallback`, `apology`, `dropped:loop-guard`, `dropped:no-trigger`, `dropped:too-long`,
 `dropped:injection-blocked`, `dropped:rate-limited`, `dropped:empty-reply`,
 `dropped:send-failed`.
 
@@ -398,6 +403,8 @@ any key may appear in any section.
 | `reply_max_chars` | `150` | Cap on the whole outbound message, prefix included; the radio carries 160 bytes minus the node name and 2 |
 | `prompt_max_chars` | `160` | Longer prompts are dropped |
 | `reply_delay_s` | `6.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](#rate-limits-and-channel-load) |
+| `shorten_retries` | `2` | Times a reply that does not fit goes back to the model with the exact limit |
+| `too_long_reply` | `That answer will not fit in one message, ask me something narrower.` | Sent when it still does not fit after the retries |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
 | `persona` | `""` | The bot's personality, prepended to the fixed system prompt; see [Personality](#personality) |
 | `backend` | `ollama` | `ollama` or `openai` |
@@ -517,9 +524,10 @@ Neither is a fault. If there are no `inbound` lines at all after the first
 reply, the radio has most likely stopped pushing messages; see the previous
 item.
 
-**Replies are cut off mid sentence.** The model is told to use 80 percent of
-the room and the hard cap trims the rest. The default cap is already what
-the radio can carry; lowering `max_tokens` shortens replies at the source.
+**Replies often end up as the "will not fit" line.** The model keeps
+overshooting the room. The default cap is already what the radio can carry,
+so lower `max_tokens` to shorten replies at the source, or raise
+`shorten_retries`.
 
 **"channel N is empty on this radio".** The channel slot in `channel_idx` has
 no channel. Create it with the setup script or the app.

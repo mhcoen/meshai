@@ -200,15 +200,63 @@ async def test_apology_is_held_too(harness):
 # ----------------------------------------------------------------------------- output shaping
 
 
-async def test_reply_is_one_sentence_whitespace_collapsed_and_capped(harness):
-    long = "The first sentence is quite long and goes on " * 6 + "for a while. Second sentence.\nThird\tline."
-    h = harness(backend=FakeBackend(reply=long))
+async def test_reply_is_one_sentence_and_whitespace_collapsed(harness):
+    h = harness(backend=FakeBackend(reply="The first sentence is\nshort enough.  Second sentence.\nThird\tline."))
     assert await h.say("Alice: q") is Decision.ANSWERED
     reply = h.sent[0][1]
-    assert len(reply) <= h.cfg.reply_max_chars
-    assert reply.startswith("@[Alice] ")
-    assert "\n" not in reply and "\t" not in reply
-    assert "Second sentence" not in reply
+    assert reply == "@[Alice] The first sentence is short enough."
+
+
+async def test_too_long_reply_goes_back_to_the_model_with_the_exact_limit(harness):
+    long = "The first sentence is quite long and goes on " * 6 + "for a while."
+    h = harness(backend=FakeBackend(replies=[long, "Short enough now."]))
+    assert await h.say("Alice: q") is Decision.ANSWERED
+    assert h.sent == [(1, "@[Alice] Short enough now.")]
+    assert len(h.backend.calls) == 2
+    retry = h.backend.calls[1]
+    assert retry[:2] == h.backend.calls[0]  # same system prompt and user message, then the exchange
+    assert retry[2]["role"] == "assistant" and retry[2]["content"].startswith("The first sentence")
+    limit = h.cfg.reply_max_chars - len("@[Alice] ")
+    assert retry[3]["role"] == "user" and f"hard limit is {limit} characters" in retry[3]["content"]
+    assert h.inbound_records()[-1]["retries"] == 1
+    assert h.service.stats.shorten_retries == 1
+
+
+async def test_second_retry_asks_for_a_tighter_target(harness):
+    long = "word " * 60
+    h = harness(backend=FakeBackend(replies=[long, long, "Fits."]))
+    assert await h.say("Alice: q") is Decision.ANSWERED
+    assert len(h.backend.calls) == 3
+    limit = h.cfg.reply_max_chars - len("@[Alice] ")
+    assert f"at most {limit} characters" in h.backend.calls[1][-1]["content"]
+    assert f"at most {int(limit * 0.7)} characters" in h.backend.calls[2][-1]["content"]
+    assert h.inbound_records()[-1]["retries"] == 2
+
+
+async def test_still_too_long_sends_the_fixed_line_never_a_truncation(harness):
+    long = "word " * 60
+    h = harness(backend=FakeBackend(reply=long))
+    assert await h.say("Alice: q") is Decision.ANSWERED_FALLBACK
+    assert h.sent == [(1, "@[Alice] " + h.cfg.too_long_reply)]
+    assert len(h.backend.calls) == 1 + h.cfg.shorten_retries
+    assert h.service.stats.fallbacks_sent == 1
+    assert any(r["event"] == "reply_too_long" and r["retries"] == 2 for r in h.records)
+    assert h.inbound_records()[-1]["decision"] == "answered:too-long-fallback"
+
+
+async def test_zero_retries_goes_straight_to_the_fixed_line(harness):
+    h = harness(backend=FakeBackend(reply="word " * 60), shorten_retries=0)
+    assert await h.say("Alice: q") is Decision.ANSWERED_FALLBACK
+    assert len(h.backend.calls) == 1
+
+
+async def test_reply_that_just_fits_is_sent_untouched(harness):
+    limit = 150 - len("@[Alice] ")
+    exact = "x" * (limit - 1) + "."
+    h = harness(backend=FakeBackend(reply=exact))
+    assert await h.say("Alice: q") is Decision.ANSWERED
+    assert h.sent == [(1, "@[Alice] " + exact)]
+    assert len(h.sent[0][1]) == 150
 
 
 async def test_short_reply_is_sent_as_is(harness):

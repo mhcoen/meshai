@@ -128,7 +128,7 @@ class FakeBackend:
 
 
 def make_config(**overrides: Any) -> Config:
-    values: dict[str, Any] = {"port": "/dev/fake"}
+    values: dict[str, Any] = {"port": "/dev/fake", "reply_delay_s": 0.0}
     values.update(overrides)
     return config_from_mapping(values, env={})
 

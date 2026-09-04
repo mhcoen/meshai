@@ -14,6 +14,7 @@ fixed apology on the tokens already taken. An injection block anywhere sends not
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -178,6 +179,7 @@ class BotService:
 
     async def handle_payload(self, payload: dict[str, Any]) -> Decision:
         cfg = self.cfg
+        received_at = self._clock()
         chan = payload.get("channel_idx")
         text = payload.get("text", "") or ""
         path_len = payload.get("path_len")
@@ -280,10 +282,10 @@ class BotService:
         except asyncio.TimeoutError:
             self.stats.model_errors += 1
             self.stats.last_latency_ms = round((self._clock() - started) * 1000.0, 1)
-            return await self._send_apology(parsed, path_len, reason="timeout")
+            return await self._send_apology(parsed, path_len, received_at, reason="timeout")
         except Exception as exc:  # noqa: BLE001
             self.stats.model_errors += 1
-            return await self._send_apology(parsed, path_len, reason=f"{type(exc).__name__}: {exc}")
+            return await self._send_apology(parsed, path_len, received_at, reason=f"{type(exc).__name__}: {exc}")
 
         # Outbound.
         shaped = shape_reply(raw)
@@ -304,9 +306,12 @@ class BotService:
         if reply is None:
             return self._record(parsed, path_len, Decision.DROP_EMPTY, latency_ms=latency_ms)
 
+        held_ms = await self._hold_for_quiet_channel(received_at)
         if await self._send(reply):
             self.stats.replies_sent += 1
-            return self._record(parsed, path_len, Decision.ANSWERED, reply=reply, latency_ms=latency_ms)
+            return self._record(
+                parsed, path_len, Decision.ANSWERED, reply=reply, latency_ms=latency_ms, held_ms=held_ms
+            )
         return self._record(parsed, path_len, Decision.DROP_SEND_FAILED, reply=reply, latency_ms=latency_ms)
 
     # ------------------------------------------------------------------ helpers
@@ -316,10 +321,29 @@ class BotService:
         lines = [e.line() for e in entries if not e.flagged]
         return render_transcript(lines, self.cfg.transcript_max_chars)
 
-    async def _send_apology(self, parsed, path_len, reason: str) -> Decision:
+    async def _hold_for_quiet_channel(self, received_at: float) -> float:
+        """Wait out the flood of the question before transmitting.
+
+        Every repeater in range rebroadcasts a channel message for a few seconds after
+        it is sent. A reply transmitted immediately lands in the middle of that and is
+        lost to collisions, while messages sent into a quiet channel get through. The
+        hold is measured from the moment the question arrived, so model latency counts
+        toward it, and it is jittered so two bots never line up.
+        """
+        target = self.cfg.reply_delay_s
+        if target <= 0:
+            return 0.0
+        target *= random.uniform(0.8, 1.25)
+        remaining = target - (self._clock() - received_at)
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+        return round(max(0.0, remaining) * 1000.0, 1)
+
+    async def _send_apology(self, parsed, path_len, received_at: float, reason: str) -> Decision:
         reply = compose_reply(parsed.sender, self.cfg.apology, self.cfg.reply_max_chars)
         if reply is None:
             return self._record(parsed, path_len, Decision.DROP_EMPTY, model_error=reason)
+        await self._hold_for_quiet_channel(received_at)
         if await self._send(reply):
             self.stats.apologies_sent += 1
             return self._record(parsed, path_len, Decision.APOLOGY, reply=reply, model_error=reason)

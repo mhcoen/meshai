@@ -356,6 +356,14 @@ On a busy or shared regional mesh, one reply per minute
 (`global_rate_per_min = 1.0`) is the considerate setting, and a shorter
 `reply_max_chars` cuts airtime in proportion.
 
+Timing matters as much as volume. For a few seconds after any channel
+message, every repeater in range rebroadcasts it, and a reply transmitted
+into that flood is lost to collisions even though a message sent into a quiet
+channel from the same radio gets through fine. The bot therefore holds each
+reply for `reply_delay_s` seconds, six by default with some random jitter,
+counted from the moment the question arrived, so the model's own latency is
+absorbed into the wait. The JSON log records the extra hold as `held_ms`.
+
 The bot also watches the channel itself. With `adaptive_enabled = true`, the
 default, it polls the radio every `utilization_poll_s` seconds for its
 received airtime and packet counters and computes the channel's receive duty
@@ -388,6 +396,7 @@ any key may appear in any section.
 | `trigger_prefix` | `""` | Empty answers everything; `"!ai "` answers only prefixed messages |
 | `reply_max_chars` | `100` | Cap on the whole outbound message, prefix included |
 | `prompt_max_chars` | `140` | Longer prompts are dropped |
+| `reply_delay_s` | `6.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](#rate-limits-and-channel-load) |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
 | `persona` | `""` | The bot's personality, prepended to the fixed system prompt; see [Personality](#personality) |
 | `backend` | `ollama` | `ollama` or `openai` |
@@ -489,6 +498,12 @@ without reopening, so this should not happen while it runs. If it does, unplug
 the radio, wait a few seconds, and plug it back in. To confirm the diagnosis,
 `esptool --port <port> --before no-reset chip-id` connects immediately when
 the chip is in the bootloader and fails when it is running MeshCore.
+
+**Other people see my messages but only a few of the bot's.** The bot's
+replies are going out while repeaters are still rebroadcasting the question
+and are lost to collisions. Make sure `reply_delay_s` is not zero; on a mesh
+with many repeaters or long hop counts raise it to 8 or 10. Shorter replies
+(`reply_max_chars`) also survive better.
 
 **The bot answered once and then went quiet.** Look at the JSON log. A
 `dropped:rate-limited` line means the second message came inside the limit; a

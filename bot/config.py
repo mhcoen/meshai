@@ -38,6 +38,7 @@ class Config:
     trigger_prefix: str = ""
     reply_max_chars: int = 100
     prompt_max_chars: int = 140
+    reply_delay_s: float = 6.0
     apology: str = "Sorry, I couldn't answer that one."
     persona: str = ""
 
@@ -93,6 +94,8 @@ class Config:
             errors.append("reply_max_chars must be positive")
         if self.prompt_max_chars <= 0:
             errors.append("prompt_max_chars must be positive")
+        if self.reply_delay_s < 0:
+            errors.append("reply_delay_s must not be negative")
         if self.model_timeout_s <= 0:
             errors.append("model_timeout_s must be positive")
         if self.max_tokens <= 0:

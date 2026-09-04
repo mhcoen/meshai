@@ -160,6 +160,43 @@ async def test_apology_is_subject_to_rate_limits(harness):
     assert len(h.sent) == 1
 
 
+# ----------------------------------------------------------------------------- reply hold
+
+
+async def test_reply_is_held_until_the_questions_flood_has_passed(harness):
+    import time
+
+    h = harness(reply_delay_s=0.1)
+    t0 = time.monotonic()
+    assert await h.say("Alice: q") is Decision.ANSWERED
+    assert time.monotonic() - t0 >= 0.07  # 0.1 s jittered down to at most 0.08 s
+    assert h.inbound_records()[-1]["held_ms"] > 0
+
+
+async def test_model_latency_counts_toward_the_hold(harness, clock):
+    class SlowClockBackend(FakeBackend):
+        async def complete(self, messages):
+            clock.advance(30)  # the model took 30 s on the fake clock
+            return await super().complete(messages)
+
+    import time
+
+    h = harness(backend=SlowClockBackend(), reply_delay_s=5.0)
+    t0 = time.monotonic()
+    assert await h.say("Alice: q") is Decision.ANSWERED
+    assert time.monotonic() - t0 < 1.0  # no real sleep: the hold was already over
+    assert h.inbound_records()[-1]["held_ms"] == 0.0
+
+
+async def test_apology_is_held_too(harness):
+    import time
+
+    h = harness(backend=FakeBackend(error=RuntimeError("x")), reply_delay_s=0.1)
+    t0 = time.monotonic()
+    assert await h.say("Alice: q") is Decision.APOLOGY
+    assert time.monotonic() - t0 >= 0.07
+
+
 # ----------------------------------------------------------------------------- output shaping
 
 

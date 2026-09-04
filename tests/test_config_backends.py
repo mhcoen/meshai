@@ -18,6 +18,7 @@ def test_defaults_match_the_agreed_setup():
     assert cfg.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert cfg.ollama_think == "off"
     assert cfg.reply_max_chars == 100
+    assert cfg.reply_delay_s == 6.0
     assert cfg.global_rate_per_min == 2.0
     assert cfg.sender_rate_per_min == 2.0
     assert cfg.injection_threshold == 0.45

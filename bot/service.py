@@ -266,7 +266,9 @@ class BotService:
             )
 
         prefix_len = len(f"@[{parsed.sender}] ")
-        budget = max(1, cfg.reply_max_chars - prefix_len)
+        # Models overshoot a stated character budget by 10 to 20 percent, so state 80 percent of
+        # the real room; the hard cap in compose_reply still enforces the true limit.
+        budget = max(1, int((cfg.reply_max_chars - prefix_len) * 0.8))
         messages = build_messages(cfg.bot_name, budget, transcript, prompt, cfg.persona)
 
         # Model, under a hard timeout.

@@ -2,7 +2,7 @@
 
 A MeshCore channel bot. It listens on one channel of a USB-attached MeshCore
 companion radio, sends each message to a local LLM, and posts a one-sentence
-reply back to the same channel as `@[sender] answer`. Every message and every
+reply back to the same channel as `@[sender] answer`, 100 characters at most by default. Every message and every
 reply passes through [vordur](https://github.com/mhcoen/vordur)'s
 prompt-injection detector before it can reach the model or the radio.
 
@@ -20,7 +20,7 @@ sees from the channel (the prompt and the recent transcript) is labelled as
 untrusted in the model input, and the model's output is checked again before it
 is transmitted. The bot has no tools, no function calling, and no access to
 anything beyond the channel, so a successful injection can at worst produce one
-bad sentence, capped at 120 characters, at the rate-limited pace (one per 30 s
+bad sentence, capped at 100 characters by default, at the rate-limited pace (one per 30 s
 by default, less when the channel is busy).
 
 ## Setup
@@ -101,8 +101,10 @@ to the JSON log whether or not the monitor is on.
    fragments that pass individually but combine into an instruction are caught.
 9. **Model.** One call under a hard `model_timeout_s` timeout. On timeout or any
    backend error the fixed `apology` is posted instead.
-10. **Shape.** Strip any leaked `<think>` block, collapse whitespace, keep the
-    first sentence.
+10. **Shape.** Strip any leaked `<think>` block, collapse whitespace, fold
+    dashes, curly quotes and ellipses to ASCII (three bytes each on the air),
+    keep the first sentence, plus the sentence after it when the first is a
+    question, since a riddle without its punchline is not an answer.
 11. **vordur, reply.** The model's output is scored. A block means nothing is
     sent, not even the apology.
 12. **Cap and send.** `@[sender] ` plus the text, cut to `reply_max_chars`
@@ -159,7 +161,7 @@ is written; the bot keeps running.
 | `channel_idx` | `1` | Channel slot on the radio to serve |
 | `bot_name` | `MeshAI` | Must equal the radio's node name; the loop guard keys on it |
 | `trigger_prefix` | `""` | `""` answers everything; e.g. `"!ai "` on shared channels |
-| `reply_max_chars` | `120` | Hard cap on the whole outbound message |
+| `reply_max_chars` | `100` | Hard cap on the whole outbound message |
 | `prompt_max_chars` | `140` | Longer prompts are dropped |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
 | `persona` | `""` | Optional sentence prepended to the fixed system prompt |

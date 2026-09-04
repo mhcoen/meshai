@@ -11,7 +11,23 @@ def test_strip_think_removes_reasoning_blocks():
 
 def test_first_sentence_keeps_only_the_first():
     assert first_sentence("It is sunny. Bring a hat!") == "It is sunny."
-    assert first_sentence("Really? Yes.") == "Really?"
+    assert first_sentence("Sure! And more. And more.") == "Sure!"
+
+
+def test_a_leading_question_keeps_its_answer_but_nothing_after():
+    assert first_sentence("Really? Yes.") == "Really? Yes."
+    assert first_sentence("Why did the signal drop? Too many dead zones. Ask again later.") == (
+        "Why did the signal drop? Too many dead zones."
+    )
+    assert first_sentence("Why did it drop? no terminator here") == "Why did it drop? no terminator here"
+    assert first_sentence("Just a question?") == "Just a question?"
+
+
+def test_typographic_punctuation_is_folded_to_ascii():
+    from bot.reply import ascii_punctuation
+
+    assert ascii_punctuation("Paris — city of lights… “really”, ‘yes’ – ok") == "Paris - city of lights... \"really\", 'yes' - ok"
+    assert shape_reply("Paris—the answer.") == "Paris - the answer."
 
 
 def test_first_sentence_does_not_split_on_decimals_or_abbreviated_numbers():

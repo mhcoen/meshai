@@ -36,7 +36,7 @@ class Config:
     # [bot]
     bot_name: str = "MeshAI"
     trigger_prefix: str = ""
-    reply_max_chars: int = 120
+    reply_max_chars: int = 100
     prompt_max_chars: int = 140
     apology: str = "Sorry, I couldn't answer that one."
     persona: str = ""

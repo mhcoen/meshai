@@ -11,10 +11,10 @@ channel_idx = 1                   # must exist on the radio; the bot refuses to 
 [bot]
 bot_name = "MeshAI"               # MUST equal the radio's node name (loop guard depends on it)
 trigger_prefix = ""               # "" answers every message on the channel; "!ai " for shared channels
-reply_max_chars = 120             # total, including the "@[sender] " prefix
+reply_max_chars = 100             # total, including the "@[sender] " prefix
 prompt_max_chars = 140            # longer prompts are dropped
 apology = "Sorry, I couldn't answer that one."
-persona = ""                      # optional sentence prepended to the fixed system prompt
+persona = "Personality: a gentle smart aleck. Dry wit, a light tease or wry aside in most replies, never cruel, and the real answer is always in there. Any joke must be a one-liner with the punchline included."
 
 [model]
 backend = "ollama"                # "ollama" or "openai" (any OpenAI-compatible /chat/completions)

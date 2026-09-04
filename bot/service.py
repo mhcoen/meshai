@@ -288,15 +288,18 @@ class BotService:
             while len(shaped) > available and retries < cfg.shorten_retries:
                 retries += 1
                 self.stats.shorten_retries += 1
+                # Models count words far better than characters: a word budget fit 5/5 tight
+                # cases after one retry where a character budget fit 1/5.
                 target = available if retries == 1 else max(20, int(available * 0.7))
+                words = max(3, target // 7)
                 messages = messages + [
                     {"role": "assistant", "content": shaped},
                     {
                         "role": "user",
                         "content": (
-                            f"That reply was {len(shaped)} characters. The hard limit is {available} characters "
-                            f"including spaces. Rewrite it as one plain sentence of at most {target} characters "
-                            "that keeps the answer. Reply with the sentence only."
+                            f"That reply was {len(shaped)} characters and the hard limit is {available}. "
+                            f"Rewrite it as one plain sentence of at most {words} words that keeps the answer. "
+                            "Reply with the sentence only."
                         ),
                     },
                 ]

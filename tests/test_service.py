@@ -217,7 +217,8 @@ async def test_too_long_reply_goes_back_to_the_model_with_the_exact_limit(harnes
     assert retry[:2] == h.backend.calls[0]  # same system prompt and user message, then the exchange
     assert retry[2]["role"] == "assistant" and retry[2]["content"].startswith("The first sentence")
     limit = h.cfg.reply_max_chars - len("@[Alice] ")
-    assert retry[3]["role"] == "user" and f"hard limit is {limit} characters" in retry[3]["content"]
+    assert retry[3]["role"] == "user" and f"hard limit is {limit}" in retry[3]["content"]
+    assert f"at most {limit // 7} words" in retry[3]["content"]
     assert h.inbound_records()[-1]["retries"] == 1
     assert h.service.stats.shorten_retries == 1
 
@@ -228,8 +229,8 @@ async def test_second_retry_asks_for_a_tighter_target(harness):
     assert await h.say("Alice: q") is Decision.ANSWERED
     assert len(h.backend.calls) == 3
     limit = h.cfg.reply_max_chars - len("@[Alice] ")
-    assert f"at most {limit} characters" in h.backend.calls[1][-1]["content"]
-    assert f"at most {int(limit * 0.7)} characters" in h.backend.calls[2][-1]["content"]
+    assert f"at most {limit // 7} words" in h.backend.calls[1][-1]["content"]
+    assert f"at most {int(limit * 0.7) // 7} words" in h.backend.calls[2][-1]["content"]
     assert h.inbound_records()[-1]["retries"] == 2
 
 

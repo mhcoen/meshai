@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
+from bot.fortune import parse_hhmm
 from bot.personas import BUILTIN_PERSONAS, HELP_COMMAND, NAME_RE, RESET_COMMAND, build_help
 
 ENV_PREFIX = "MESHAI_"
@@ -65,6 +66,18 @@ class Config:
     temperature: float = 0.6
     max_tokens: int = 80
     model_timeout_s: float = 30.0
+
+    # [fortune]
+    fortune_enabled: bool = True
+    fortune_time: str = "06:00"
+    fortune_jitter_min: float = 12.0
+    fortune_cutoff_min: float = 30.0
+    fortune_prefix: str = "Fortune: "
+    fortune_prompt: str = (
+        "Write today's fortune for everyone on the channel: one silly, funny sentence in the style of a "
+        "fortune cookie, somehow involving {subject}. Do not mention or address anyone. Today is {date}."
+    )
+    fortune_fallback: str = "The mesh is quiet this morning, and so is your fortune."
 
     # [limits]
     global_rate_per_min: float = 4.0
@@ -122,6 +135,16 @@ class Config:
             errors.append("reply_delay_s must not be negative")
         if self.model_timeout_s <= 0:
             errors.append("model_timeout_s must be positive")
+        try:
+            parse_hhmm(self.fortune_time)
+        except ValueError as exc:
+            errors.append(str(exc))
+        if self.fortune_jitter_min < 0 or self.fortune_cutoff_min < 0:
+            errors.append("fortune_jitter_min and fortune_cutoff_min must not be negative")
+        if not self.fortune_prompt.strip() or "{subject}" not in self.fortune_prompt:
+            errors.append("fortune_prompt must contain {subject}")
+        if self.reply_max_chars > 0 and len(self.fortune_prefix) + len(self.fortune_fallback) > self.reply_max_chars:
+            errors.append("fortune_prefix plus fortune_fallback must fit in reply_max_chars")
         if not self.personas:
             errors.append("personas must not be empty")
         for name, text in self.personas.items():

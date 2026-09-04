@@ -66,10 +66,45 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
     )
 
 
+def release_boot_lines(meshcore) -> None:
+    """Drop DTR and RTS after connecting.
+
+    pyserial asserts DTR on open and meshcore then clears RTS. On the ESP32
+    auto-program circuit (CP2102 boards such as the Heltec Wireless Paper) that
+    combination holds IO0 low for the whole session: the chip keeps running, but
+    any reset while the port is open (brownout at full TX power, watchdog, crash)
+    lands it in the serial bootloader instead of MeshCore, silently. With both
+    lines released a reset boots MeshCore normally.
+    """
+    try:
+        ser = meshcore.connection_manager.connection.transport.serial
+        ser.dtr = False
+        ser.rts = False
+    except AttributeError:
+        pass  # not a pyserial transport (tests, other connection types)
+
+
+async def connect(cfg: Config, attempts: int = 3, delay_s: float = 2.0):
+    """Open the companion; retry a couple of times in case it is still booting."""
+    for attempt in range(1, attempts + 1):
+        meshcore = await MeshCore.create_serial(cfg.port)
+        if meshcore is not None:
+            release_boot_lines(meshcore)
+            return meshcore
+        if attempt < attempts:
+            print(f"no response from {cfg.port}, retrying ({attempt}/{attempts})...", file=sys.stderr)
+            await asyncio.sleep(delay_s)
+    return None
+
+
 async def run(cfg: Config, headless: bool, log: EventLog) -> int:
-    meshcore = await MeshCore.create_serial(cfg.port)
+    meshcore = await connect(cfg)
     if meshcore is None:
-        print(f"error: no response from a MeshCore companion on {cfg.port}", file=sys.stderr)
+        print(
+            f"error: no response from a MeshCore companion on {cfg.port} "
+            "(if it was running before, unplug and replug it: it may be stuck in the bootloader)",
+            file=sys.stderr,
+        )
         return 2
     service = build_service(cfg, meshcore, log)
     loop = asyncio.get_running_loop()
@@ -124,12 +159,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         log_path = "meshai.jsonl"  # the TUI owns the terminal, so stderr is not a usable log target
         print(f"JSON log: {log_path}", file=sys.stderr)
     if args.debug:
-        debug_target = f"{log_path}.debug" if log_path else None
-        logging.basicConfig(
-            level=logging.DEBUG,
-            filename=debug_target,
-            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        # meshcore calls logging.basicConfig at import, so configure handlers explicitly.
+        root = logging.getLogger()
+        root.setLevel(logging.DEBUG)
+        handler: logging.Handler = (
+            logging.FileHandler(f"{log_path}.debug", encoding="utf-8") if log_path else logging.StreamHandler(sys.stderr)
         )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+        for existing in list(root.handlers):
+            root.removeHandler(existing)
+        root.addHandler(handler)
     log = EventLog(path=log_path)
     try:
         return asyncio.run(run(cfg, headless=args.headless, log=log))

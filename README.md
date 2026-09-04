@@ -36,9 +36,11 @@ channel utilisation, and every message with the bot's decision on it:
 
 ## Features
 
-- Serves one MeshCore channel and answers every message on it; on a shared
-  channel, set `trigger_prefix` so it answers only messages that start with
-  a keyword such as `!ai`
+- Serves one MeshCore channel and answers every message on it. A trigger
+  prefix is available for shared channels and is off by default: with
+  `trigger_prefix = "!ai "` in the config, only messages that begin with an
+  exclamation mark followed by ai and a space get an answer, and the rest
+  are ignored
 - Local model through Ollama, or any OpenAI compatible chat endpoint
 - One sentence replies, plain ASCII, one byte per character on the air, capped
   at 150 characters, which is all the radio will carry
@@ -309,9 +311,11 @@ part is whatever the sending node put there; nothing verifies it.
    everything after it.
 2. **Loop guard.** Dropped if the sender is the bot's own name, or the prompt
    starts with `@[`, which is a reply from this or any other bot.
-3. **Trigger.** With an empty `trigger_prefix` every message is a prompt.
-   With a prefix, the message must start with it exactly and something must
-   follow.
+3. **Trigger.** `trigger_prefix` is empty by default, so every message is a
+   prompt. Set it to `"!ai "` (an exclamation mark, the letters ai, and a
+   space) on a shared channel, and only messages that begin with exactly
+   that text are answered; the text after it is the prompt and must not be
+   empty.
 4. **Length.** Prompts over `prompt_max_chars` are dropped.
 5. **Injection check, prompt.** Dropped if the injection score is at or above
    `injection_threshold`.
@@ -412,7 +416,7 @@ any key may appear in any section.
 | `port` | required | Serial device of the companion radio |
 | `channel_idx` | `1` | Channel slot on the radio to serve |
 | `bot_name` | `MeshAI` | Must equal the radio's node name |
-| `trigger_prefix` | `""` | Empty answers everything; `"!ai "` answers only prefixed messages |
+| `trigger_prefix` | `""` | Off by default, so every message is answered; `"!ai "` answers only messages beginning with that exact text |
 | `reply_max_chars` | `150` | Cap on the whole outbound message, prefix included; the radio carries 160 bytes minus the node name and 2 |
 | `prompt_max_chars` | `160` | Longer prompts are dropped |
 | `reply_delay_s` | `8.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](#rate-limits-and-channel-load) |

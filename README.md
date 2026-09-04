@@ -58,9 +58,11 @@ The radio needs the MeshCore companion USB firmware, a node name equal to
 
 ## Requirements
 
-- A Mac or Linux computer that stays on. The default model uses about 18 GB
-  of memory; 32 GB of RAM is a comfortable minimum, 64 GB is better. Apple
-  Silicon works well.
+- A Mac or Linux computer that stays on. This is a good use for an old
+  laptop that is sitting in a drawer: the bot needs no screen once it is
+  running, and one reply every 30 seconds is not much work. The default model
+  uses about 18 GB of memory; 32 GB of RAM is a comfortable minimum, 64 GB is
+  better. Apple Silicon works well.
 - A MeshCore companion radio on USB. Built and tested with a Heltec Wireless
   Paper (ESP32-S3, SX1262) on MeshCore companion firmware 1.17.1. Any board
   with a MeshCore "companion radio USB" build should work.

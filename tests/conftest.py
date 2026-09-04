@@ -65,6 +65,7 @@ class FakeMeshCore:
         self.auto_fetch: bool | None = None
         self.disconnected = False
         self.is_connected = True
+        self.decrypt_channel_logs = False
 
     def subscribe(self, event_type, callback, attribute_filters=None):
         sub = (event_type, callback, attribute_filters)
@@ -83,6 +84,16 @@ class FakeMeshCore:
     async def disconnect(self) -> None:
         self.disconnected = True
         self.is_connected = False
+
+    def set_decrypt_channel_logs(self, value: bool) -> None:
+        self.decrypt_channel_logs = value
+
+    async def deliver_rx_log(self, **payload) -> None:
+        """Dispatch an RX_LOG_DATA event the way the library would after parsing a heard packet."""
+        event = Event(EventType.RX_LOG_DATA, payload, {})
+        for event_type, callback, _filters in list(self.subscriptions):
+            if event_type == EventType.RX_LOG_DATA:
+                await callback(event)
 
     async def deliver(self, text: str, channel_idx: int = 1, path_len: int = 0) -> None:
         """Dispatch a CHANNEL_MSG_RECV the way the library would, honouring attribute filters."""

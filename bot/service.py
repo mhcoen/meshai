@@ -74,6 +74,7 @@ class Stats:
     persona_expires_at: float | None = None  # wall clock (time.time) for display
     persona_switches: int = 0
     posts_sent: int = 0  # unsolicited posts: fortunes, reset notices
+    rx_heard: int = 0  # packets the radio reported hearing on the served channel
     last_latency_ms: float | None = None
     last_decision: str = ""
     started_at: float = field(default_factory=time.time)
@@ -108,6 +109,7 @@ class BotService:
         self._stopped = False
         self._last_sent: str | None = None
         self.active_persona = cfg.default_persona
+        self._channel_hash: str | None = None
         self._persona_deadline: float | None = None  # monotonic clock value
         self._persona_task: asyncio.Task[None] | None = None
         self.timer_tick_s = 30.0  # how often the persona timer re-checks the clock (tests shrink it)
@@ -126,6 +128,7 @@ class BotService:
                 f"channel {self.cfg.channel_idx} is empty on this radio; create it first"
             )
         self.stats.channel_name = name
+        self._channel_hash = (result.payload or {}).get("channel_hash")
         self.stats.connected = bool(getattr(self.mc, "is_connected", True))
         self.log.emit(
             "startup",
@@ -145,6 +148,12 @@ class BotService:
         )
         self._subs.append(self.mc.subscribe(EventType.CONNECTED, self._on_connected))
         self._subs.append(self.mc.subscribe(EventType.DISCONNECTED, self._on_disconnected))
+        if self.cfg.rx_log != "off":
+            # The companion pushes a log frame for every packet it hears. With channel
+            # decryption on, packets on our channel decode to "Sender: text", so the log
+            # shows what the radio heard even when no message was delivered.
+            self.mc.set_decrypt_channel_logs(True)
+            self._subs.append(self.mc.subscribe(EventType.RX_LOG_DATA, self._on_rx_log))
         await self.mc.start_auto_message_fetching()
         if self.monitor is not None:
             self.monitor.start()
@@ -184,6 +193,27 @@ class BotService:
 
     async def _on_channel_message(self, event: Any) -> None:
         await self.handle_payload(event.payload or {})
+
+    async def _on_rx_log(self, event: Any) -> None:
+        """One `rx` record per packet the radio heard (our channel only unless rx_log = "all")."""
+        p = event.payload or {}
+        ours = p.get("chan_hash") is not None and p.get("chan_hash") == self._channel_hash
+        if self.cfg.rx_log == "channel" and not ours:
+            return
+        if ours:
+            self.stats.rx_heard += 1
+        self.log.emit(
+            "rx",
+            ours=ours,
+            type=p.get("payload_typename"),
+            route=p.get("route_typename"),
+            path_len=p.get("path_len"),
+            rssi=p.get("rssi"),
+            snr=p.get("snr"),
+            chan=p.get("chan_name") or p.get("chan_hash"),
+            message=p.get("message") if ours else None,
+            msg_hash=p.get("msg_hash") if ours else None,
+        )
 
     # ------------------------------------------------------------------ the handler
 

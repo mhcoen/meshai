@@ -142,7 +142,7 @@ class Harness:
         self.records: list[dict[str, Any]] = []
         self.log = EventLog(stream=io.StringIO())
         self.log.subscribe(self.records.append)
-        self.gate = gate if gate is not None else InjectionGate(cfg.vordur_threshold, cfg.vordur_sanitize)
+        self.gate = gate if gate is not None else InjectionGate(cfg.injection_threshold)
         self.limiter = RateLimiter(
             cfg.global_rate_per_min, cfg.global_burst, cfg.sender_rate_per_min, cfg.sender_burst, clock=clock
         )

@@ -44,9 +44,8 @@ duty_high = 0.15                  # at/above this it is paused; relaxes one step
 history_size = 20                 # ring buffer of recent channel lines, including the bot's own
 transcript_max_chars = 1500       # rendered transcript budget; truncated from the oldest end
 
-[vordur]
-vordur_threshold = 0.45           # block when vordur's score >= this (vordur's own cutoff is 0.45)
-vordur_sanitize = false           # run vordur's sanitizer on the prompt before detection
+[injection]
+injection_threshold = 0.45           # block a message when its injection score is at or above this
 
 [logging]
 log_file = ""                     # "" = JSON lines to stderr; otherwise appended to this path

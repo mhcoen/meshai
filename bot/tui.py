@@ -89,7 +89,7 @@ class MeshAIApp(App[None]):
             f"[b]Model[/b]   {cfg.backend}:{cfg.model}\n"
             f"         last latency {latency}\n"
             f"[b]Counts[/b]  in {s.received}  replies {s.replies_sent}  apologies {s.apologies_sent}\n"
-            f"         vordur-blocked {s.vordur_blocks}  rate-limited {s.rate_limited}\n"
+            f"         injection-blocked {s.injection_blocks}  rate-limited {s.rate_limited}\n"
             f"         send-err {s.send_errors}  model-err {s.model_errors}"
         )
         snap = self._limiter.snapshot()
@@ -133,8 +133,8 @@ class MeshAIApp(App[None]):
         if event == "inbound":
             decision = record.get("decision", "")
             extra = ""
-            if decision == "dropped:vordur-blocked":
-                extra = f" [{record.get('point')} score={record.get('vordur_score')} {record.get('vordur_rules')}]"
+            if decision == "dropped:injection-blocked":
+                extra = f" [{record.get('point')} score={record.get('injection_score')} {record.get('injection_rules')}]"
             elif decision == "dropped:rate-limited":
                 extra = f" [{record.get('reason')}]"
             elif decision in ("answered", "apology"):
@@ -146,7 +146,7 @@ class MeshAIApp(App[None]):
         elif event == "rate_level":
             line = f"{ts} [rate] {record.get('old')} -> {record.get('new')} at duty {record.get('duty')}"
         elif event in (
-            "startup", "shutdown", "connected", "disconnected", "send_error", "vordur_block",
+            "startup", "shutdown", "connected", "disconnected", "send_error", "injection_block",
             "shutdown_error", "utilization_error",
         ):
             details = {k: v for k, v in record.items() if k not in ("ts", "event")}

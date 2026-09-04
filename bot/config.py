@@ -69,9 +69,8 @@ class Config:
     duty_low: float = 0.05
     duty_high: float = 0.15
 
-    # [vordur]
-    vordur_threshold: float = 0.45
-    vordur_sanitize: bool = False
+    # [injection]
+    injection_threshold: float = 0.45
 
     # [logging]
     log_file: str = ""
@@ -106,8 +105,8 @@ class Config:
                 errors.append(f"{name} must be at least 1")
         if self.transcript_max_chars < 0:
             errors.append("transcript_max_chars must not be negative")
-        if not 0.0 <= self.vordur_threshold <= 1.0:
-            errors.append("vordur_threshold must be between 0 and 1")
+        if not 0.0 <= self.injection_threshold <= 1.0:
+            errors.append("injection_threshold must be between 0 and 1")
         if self.utilization_poll_s <= 0 or self.utilization_window_s < self.utilization_poll_s:
             errors.append("utilization_poll_s must be positive and no larger than utilization_window_s")
         if not 0.0 <= self.duty_low < self.duty_high <= 1.0:

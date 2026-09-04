@@ -8,8 +8,7 @@ A chat bot for a [MeshCore](https://meshcore.co.uk) channel. MeshAI runs on a
 computer with a MeshCore companion radio on USB, listens on one channel,
 sends each message to a language model running on the same computer, and
 posts a one sentence reply back to the channel as `@[sender] answer`. Every
-message and every reply is checked by the
-[vordur](https://github.com/mhcoen/vordur) prompt injection detector before it
+message and every reply passes a built-in prompt injection detector before it
 can reach the model or the radio.
 
 It is a small Python package with no web interface, no database, and no
@@ -33,16 +32,14 @@ history on disk.
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 140 tests that need no radio, no model, and no network
+- 152 tests that need no radio, no model, and no network
 
 ## Quick start
 
 ```bash
-git clone https://github.com/mhcoen/vordur.git GuardLLM
 git clone https://github.com/mhcoen/meshai.git
 cd meshai
 uv venv --python 3.12
-uv pip install -e ../GuardLLM
 uv pip install -e '.[dev]'
 ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M
 cp config.example.toml config.toml   # set port, channel_idx, bot_name
@@ -64,7 +61,6 @@ The radio needs the MeshCore companion USB firmware, a node name equal to
 - Python 3.11 or newer, and git.
 - [Ollama](https://ollama.com), or any server that speaks the OpenAI chat
   completions API.
-- A checkout of vordur, which is not on PyPI.
 
 ## Installation
 
@@ -77,13 +73,9 @@ and `pip` work the same way; pip equivalents are given where they differ.
    curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-2. Get the code and the vordur checkout side by side. `pyproject.toml` points
-   at `../GuardLLM` for vordur, so keep that name or edit the path under
-   `[tool.uv.sources]`.
+2. Get the code:
 
    ```bash
-   mkdir -p ~/proj && cd ~/proj
-   git clone https://github.com/mhcoen/vordur.git GuardLLM
    git clone https://github.com/mhcoen/meshai.git
    cd meshai
    ```
@@ -92,7 +84,6 @@ and `pip` work the same way; pip equivalents are given where they differ.
 
    ```bash
    uv venv --python 3.12
-   uv pip install -e ../GuardLLM
    uv pip install -e '.[dev]'
    ```
 
@@ -100,16 +91,11 @@ and `pip` work the same way; pip equivalents are given where they differ.
 
    ```bash
    python3 -m venv .venv
-   .venv/bin/pip install -e ../GuardLLM
    .venv/bin/pip install -e '.[dev]'
    ```
 
-   To skip the sibling checkout, install vordur from git first and the
-   sibling path is never used:
-
-   ```bash
-   uv pip install git+https://github.com/mhcoen/vordur.git
-   ```
+   The dependencies are meshcore, ollama, httpx, textual, and confusables,
+   which supplies the Unicode look-alike table the injection detector uses.
 
 4. Check that the command exists:
 
@@ -298,18 +284,18 @@ part is whatever the sending node put there; nothing verifies it.
    With a prefix, the message must start with it exactly and something must
    follow.
 4. **Length.** Prompts over `prompt_max_chars` are dropped.
-5. **vordur, prompt.** Dropped if the injection score is at or above
-   `vordur_threshold`.
+5. **Injection check, prompt.** Dropped if the injection score is at or above
+   `injection_threshold`.
 6. **Rate limits.** A global token bucket and one per sender name. Tokens are
    taken here, once, and whatever goes out for this message rides on them.
    When a bucket is empty the message is dropped and logged.
 7. **Context.** The last `history_size` channel lines, including the bot's
-   own posts and excluding lines vordur flagged when they arrived, are
+   own posts and excluding lines the detector flagged when they arrived, are
    rendered as `Sender: text`, trimmed from the oldest end to
    `transcript_max_chars`, and placed in one user message after the current
    prompt, between markers that label them as untrusted. History is never
    replayed as earlier chat turns.
-8. **vordur, context.** Fragments that pass one at a time but add up to an
+8. **Injection check, context.** Fragments that pass one at a time but add up to an
    instruction are caught here.
 9. **Model.** One call under a hard timeout of `model_timeout_s`. On a
    timeout or any error the fixed `apology` text is posted instead.
@@ -317,17 +303,17 @@ part is whatever the sending node put there; nothing verifies it.
     to plain ASCII with ordinary punctuation, keep the first sentence. If
     the first sentence is a question the next sentence is kept too, so a
     riddle keeps its punchline.
-11. **vordur, reply.** If it is flagged nothing is sent, not even the
+11. **Injection check, reply.** If it is flagged nothing is sent, not even the
     apology.
 12. **Cap and send.** `@[sender] ` plus the text, cut to `reply_max_chars`
     in total. The prefix is never cut; if a very long sender name leaves no
     room, nothing is sent. A send failure is logged and not retried.
 
 Every inbound message produces one `inbound` record in the JSON log with
-`sender`, `prompt`, `path_len`, `decision`, and the reason, or the vordur
+`sender`, `prompt`, `path_len`, `decision`, and the reason, or the injection
 score and matched rules, when it was dropped. Decisions: `answered`,
 `apology`, `dropped:loop-guard`, `dropped:no-trigger`, `dropped:too-long`,
-`dropped:vordur-blocked`, `dropped:rate-limited`, `dropped:empty-reply`,
+`dropped:injection-blocked`, `dropped:rate-limited`, `dropped:empty-reply`,
 `dropped:send-failed`.
 
 ## Rate limits and channel load
@@ -401,8 +387,7 @@ any key may appear in any section.
 | `duty_high` | `0.15` | Receive duty cycle at which replies pause |
 | `history_size` | `20` | Channel lines kept in memory |
 | `transcript_max_chars` | `1500` | Size of the transcript given to the model |
-| `vordur_threshold` | `0.45` | Block at or above this score; vordur's own cutoff is 0.45 |
-| `vordur_sanitize` | `false` | Run vordur's sanitizer on the prompt before scoring |
+| `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |
 | `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshai.jsonl` (monitor) |
 
 The example config ships with a persona that gives the bot a sarcastic
@@ -417,33 +402,31 @@ has no tools, no function calling, and no access to anything but the channel,
 so the worst a successful injection can do is one bad sentence, capped at
 `reply_max_chars`, at the rate limited pace.
 
-vordur is used at four points: each channel line when it arrives, the prompt,
-the assembled transcript plus prompt, and the model's reply. The bot calls
-`vordur.security.prompt_injection_detector.detect_prompt_injection` with the
-plain text content type. It is stateless, pure pattern matching, and takes
-well under a millisecond. It returns a score between 0 and 1 and the names of
-the matched rules; the score is compared with `vordur_threshold`. With
-`vordur_sanitize = true` the prompt is first passed through
-`vordur.security.sanitizer.sanitize`, which strips invisible characters,
-folds look alike characters, and decodes encoded payloads, and the cleaned
-text is what the model sees.
+The prompt injection detector in `bot/injection.py` is applied at four
+points: each channel line when it arrives, the prompt, the assembled
+transcript plus prompt, and the model's reply. It is stateless, pure pattern
+matching, and takes well under a millisecond. Text is normalised first
+(look-alike characters folded to ASCII, zero width and bidi control
+characters removed, case and repeated punctuation collapsed), split into
+clauses, and each clause is scored against rules for instruction overrides,
+concealment, secret solicitation, goal rewrites, urgency, and their
+combinations. The result is a score between 0 and 1 and the names of the
+matched rules; the score is compared with `injection_threshold`. The detector
+is adapted from the one in the author's
+[vordur](https://github.com/mhcoen/vordur) library, under the same MIT
+license, and its original test cases are in `tests/test_injection.py`.
 
 Limits to know about:
 
-- The detector is a module level function used by vordur's own tests and
-  benchmarks, but it is not re-exported from the package's top level. The
-  `Guard` facade is not used because it keeps session state and does not
-  expose the score. `bot/guard.py` is the one place to change if that
-  changes.
-- vordur's rules are English only, and its published figures are about 99
-  percent precision and 75 percent recall on its corpus, so roughly a quarter
-  of attack phrasings get past it. The model input is built to help: the
-  prompt comes before the history, and the system prompt says that history
-  lines addressing the bot by name or telling it how to behave are attacks.
-  On the default model that took planted transcript instructions from being
+- The rules are English only. In its original setting the detector measured
+  about 99 percent precision and 75 percent recall, so roughly a quarter of
+  attack phrasings get past it. The model input is built to help: the prompt
+  comes before the history, and the system prompt says that history lines
+  addressing the bot by name or telling it how to behave are attacks. On the
+  default model that took planted transcript instructions from being
   followed 4 times in 12 to 0 times in 30.
-- Any exception from vordur is treated as a block: no model call, nothing
-  sent, and an `inbound` record with `vordur_error`.
+- Any exception from the detector is treated as a block: no model call,
+  nothing sent, and an `inbound` record with `injection_error`.
 
 The API key for an OpenAI compatible backend comes only from the
 `MESHAI_OPENAI_API_KEY` environment variable and is never logged.
@@ -491,8 +474,8 @@ uv pip install -e '.[dev]'
 ```
 
 No radio, no model server, and no network are needed. The MeshCore object and
-the model backend are replaced by fakes. The vordur tests use the injection
-strings from vordur's own test suite and check that flagged text never reaches
+the model backend are replaced by fakes. The injection tests use the
+detector's original attack strings and check that flagged text never reaches
 the model and never reaches the radio.
 
 Layout:
@@ -503,7 +486,8 @@ bot/
   config.py       TOML config with MESHAI_* environment overrides
   service.py      the message handler and decision path
   parse.py        sender and prompt parsing
-  guard.py        the vordur gate
+  guard.py        the injection gate
+  injection.py    the prompt injection detector
   prompt.py       system prompt and the single user message
   backends.py     Ollama and OpenAI compatible backends
   reply.py        output shaping and the length cap
@@ -526,7 +510,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## Author
 
-**Michael H. Coen**
+**Michael H. Coen**, W1MHC/WRYV459
 
 Email: mhcoen@gmail.com | mhcoen@alum.mit.edu
 GitHub: [@mhcoen](https://github.com/mhcoen)

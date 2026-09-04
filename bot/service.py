@@ -4,11 +4,11 @@ Order of checks for an inbound message (first failure wins, every outcome is log
   1. loop guard   - sender is the bot, or the body starts with "@["
   2. trigger      - body must start with the configured prefix ("" = everything)
   3. length       - prompt over prompt_max_chars
-  4. vordur       - the prompt itself
+  4. injection    - the prompt itself
   5. rate limits  - global and per-sender tokens, taken once, here
-then: assemble context -> vordur on transcript+prompt -> model (hard timeout) ->
-vordur on the reply -> shape -> cap -> send. A model timeout or error sends the fixed
-apology on the tokens already taken. A vordur block anywhere sends nothing.
+then: assemble context -> injection check on transcript+prompt -> model (hard timeout) ->
+injection check on the reply -> shape -> cap -> send. A model timeout or error sends the
+fixed apology on the tokens already taken. An injection block anywhere sends nothing.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ class Decision(str, Enum):
     DROP_LOOP_GUARD = "dropped:loop-guard"
     DROP_NO_TRIGGER = "dropped:no-trigger"
     DROP_TOO_LONG = "dropped:too-long"
-    DROP_VORDUR = "dropped:vordur-blocked"
+    DROP_INJECTION = "dropped:injection-blocked"
     DROP_RATE_LIMITED = "dropped:rate-limited"
     DROP_EMPTY = "dropped:empty-reply"
     DROP_SEND_FAILED = "dropped:send-failed"
@@ -58,7 +58,7 @@ class Stats:
     received: int = 0
     replies_sent: int = 0
     apologies_sent: int = 0
-    vordur_blocks: int = 0
+    injection_blocks: int = 0
     rate_limited: int = 0
     send_errors: int = 0
     model_errors: int = 0
@@ -192,7 +192,7 @@ class BotService:
         if parsed.sender == cfg.bot_name:
             return self._record(parsed, path_len, Decision.DROP_LOOP_GUARD, reason="own-name")
 
-        # Every foreign line goes into history, with its own vordur verdict attached.
+        # Every foreign line goes into history, with its own injection verdict attached.
         line_verdict = self.gate.check(f"{parsed.sender}: {parsed.body}")
         self.history.append(
             HistoryEntry(
@@ -204,9 +204,9 @@ class BotService:
             )
         )
         if line_verdict.blocked:
-            self.stats.vordur_blocks += 1
+            self.stats.injection_blocks += 1
             self.log.emit(
-                "vordur_block",
+                "injection_block",
                 point="transcript-line",
                 sender=parsed.sender,
                 score=line_verdict.score,
@@ -232,15 +232,15 @@ class BotService:
         # 4. Vordur on the prompt.
         verdict = self.gate.check(prompt)
         if verdict.blocked:
-            self.stats.vordur_blocks += 1
+            self.stats.injection_blocks += 1
             return self._record(
                 parsed,
                 path_len,
-                Decision.DROP_VORDUR,
+                Decision.DROP_INJECTION,
                 point="prompt",
-                vordur_score=verdict.score,
-                vordur_rules=list(verdict.rules),
-                vordur_error=verdict.error,
+                injection_score=verdict.score,
+                injection_rules=list(verdict.rules),
+                injection_error=verdict.error,
             )
         prompt = verdict.text  # sanitized form when that mode is on
 
@@ -254,15 +254,15 @@ class BotService:
         transcript = self._transcript_excluding_latest()
         context_verdict = self.gate.check(f"{transcript}\n{prompt}" if transcript else prompt)
         if context_verdict.blocked:
-            self.stats.vordur_blocks += 1
+            self.stats.injection_blocks += 1
             return self._record(
                 parsed,
                 path_len,
-                Decision.DROP_VORDUR,
+                Decision.DROP_INJECTION,
                 point="context",
-                vordur_score=context_verdict.score,
-                vordur_rules=list(context_verdict.rules),
-                vordur_error=context_verdict.error,
+                injection_score=context_verdict.score,
+                injection_rules=list(context_verdict.rules),
+                injection_error=context_verdict.error,
             )
 
         prefix_len = len(f"@[{parsed.sender}] ")
@@ -289,15 +289,15 @@ class BotService:
         shaped = shape_reply(raw)
         out_verdict = self.gate.check(shaped)
         if out_verdict.blocked:
-            self.stats.vordur_blocks += 1
+            self.stats.injection_blocks += 1
             return self._record(
                 parsed,
                 path_len,
-                Decision.DROP_VORDUR,
+                Decision.DROP_INJECTION,
                 point="reply",
-                vordur_score=out_verdict.score,
-                vordur_rules=list(out_verdict.rules),
-                vordur_error=out_verdict.error,
+                injection_score=out_verdict.score,
+                injection_rules=list(out_verdict.rules),
+                injection_error=out_verdict.error,
                 latency_ms=latency_ms,
             )
         reply = compose_reply(parsed.sender, shaped, cfg.reply_max_chars)

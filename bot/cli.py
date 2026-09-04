@@ -59,7 +59,7 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
         cfg=cfg,
         meshcore=meshcore,
         backend=make_backend(cfg),
-        gate=InjectionGate(threshold=cfg.vordur_threshold, sanitize=cfg.vordur_sanitize),
+        gate=InjectionGate(threshold=cfg.injection_threshold),
         limiter=limiter,
         history=History(cfg.history_size),
         log=log,

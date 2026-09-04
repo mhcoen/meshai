@@ -20,8 +20,7 @@ def test_defaults_match_the_agreed_setup():
     assert cfg.reply_max_chars == 100
     assert cfg.global_rate_per_min == 2.0
     assert cfg.sender_rate_per_min == 2.0
-    assert cfg.vordur_threshold == 0.45
-    assert cfg.vordur_sanitize is False
+    assert cfg.injection_threshold == 0.45
     assert cfg.adaptive_enabled is True
     assert (cfg.duty_low, cfg.duty_high) == (0.05, 0.15)
     assert (cfg.utilization_poll_s, cfg.utilization_window_s) == (10.0, 60.0)
@@ -29,11 +28,11 @@ def test_defaults_match_the_agreed_setup():
 
 def test_sections_are_flattened_and_env_overrides_win():
     doc = {"radio": {"port": "/dev/a", "channel_idx": 0}, "model": {"model": "x"}}
-    env = {"MESHAI_CHANNEL_IDX": "2", "MESHAI_MODEL": "qwen2.5:14b", "MESHAI_VORDUR_SANITIZE": "true", "MESHAI_TEMPERATURE": "0.7"}
+    env = {"MESHAI_CHANNEL_IDX": "2", "MESHAI_MODEL": "qwen2.5:14b", "MESHAI_ADAPTIVE_ENABLED": "false", "MESHAI_TEMPERATURE": "0.7"}
     cfg = config_from_mapping(doc, env=env)
     assert cfg.channel_idx == 2
     assert cfg.model == "qwen2.5:14b"
-    assert cfg.vordur_sanitize is True
+    assert cfg.adaptive_enabled is False
     assert cfg.temperature == 0.7
 
 
@@ -53,7 +52,7 @@ def test_missing_port_is_rejected():
         {"backend": "anthropic"},
         {"channel_idx": 300},
         {"reply_max_chars": 0},
-        {"vordur_threshold": 1.5},
+        {"injection_threshold": 1.5},
         {"ollama_think": "maybe"},
         {"global_burst": 0},
         {"duty_low": 0.2, "duty_high": 0.1},

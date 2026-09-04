@@ -10,7 +10,7 @@ from dataclasses import dataclass
 class HistoryEntry:
     sender: str
     text: str
-    flagged: bool = False  # vordur flagged this line at ingestion; never rendered
+    flagged: bool = False  # the injection gate flagged this line at ingestion; never rendered
     score: float = 0.0
     rules: tuple[str, ...] = ()
 

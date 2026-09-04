@@ -92,7 +92,7 @@ async def test_fire_posts_in_the_active_voice_through_the_reply_path(harness):
     assert h.sent[-1] == (1, "Fortune: You will find a sock.")
     msgs = h.backend.calls[-1]
     assert "pirate" in msgs[0]["content"]  # active voice
-    assert "fortune about " in msgs[1]["content"] and "Friday, September 04" in msgs[1]["content"]
+    assert "fortune about " in msgs[1]["content"] and "on Friday, September 4\n" in msgs[1]["content"]
     subject = msgs[1]["content"].split("fortune about ")[1].split(" on ")[0]
     assert subject in SUBJECTS
     assert h.history.entries()[-1].line() == "MeshAI: Fortune: You will find a sock."

@@ -1,8 +1,9 @@
 """The daily fortune: an unsolicited post a little after a set time each morning.
 
-The next firing is computed from the machine's local wall clock: the configured
-time plus a fresh random offset each day, so it never lands on the exact minute
-and drifts with neither DST nor machine sleep. At firing the fortune is generated
+The next firing is computed from the machine's local wall clock, read as naive
+local time: the configured time plus a fresh random offset each day, so it never
+lands on the exact minute. The wait re-reads the clock every tick, so a DST change
+overnight or a machine that slept still fires when the wall clock says so. At firing the fortune is generated
 in the active voice on a random subject and posted through the same path as a
 reply: plain ASCII, the injection check, the length cap with word-budget retries,
 a global limiter token. If the channel is paused or the model fails, it retries
@@ -14,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
@@ -43,6 +43,11 @@ def parse_hhmm(text: str) -> tuple[int, int]:
     return hour, minute
 
 
+def format_date(when: datetime) -> str:
+    """'Friday, September 4' with no zero padding on the day."""
+    return f"{when:%A}, {when:%B} {when.day}"
+
+
 def next_fire(now: datetime, hhmm: str, jitter_min: float, rng: random.Random) -> datetime:
     """The next slot at or after ``now``: today's if still ahead, else tomorrow's, with fresh jitter."""
     hour, minute = parse_hhmm(hhmm)
@@ -66,7 +71,7 @@ class FortuneScheduler:
         prompt: str,
         fallback: str,
         retry_s: float = 120.0,
-        now: Callable[[], datetime] = lambda: datetime.now().astimezone(),
+        now: Callable[[], datetime] = datetime.now,
         rng: random.Random | None = None,
     ):
         self.service = service
@@ -130,7 +135,7 @@ class FortuneScheduler:
         while True:
             attempts += 1
             subject = self._rng.choice(SUBJECTS)
-            request = self.prompt.format(subject=subject, date=self._now().strftime("%A, %B %d"))
+            request = self.prompt.format(subject=subject, date=format_date(self._now()))
             outcome = await self.service.post_generated(self.prefix, request, self.fallback, what="fortune")
             if outcome == "sent":
                 self.posted += 1

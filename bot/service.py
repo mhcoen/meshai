@@ -29,7 +29,7 @@ from bot.guard import InjectionGate
 from bot.history import History, HistoryEntry, render_transcript
 from bot.jsonlog import EventLog
 from bot.parse import extract_prompt, parse_channel_text
-from bot.personas import HELP_COMMAND, RESET_COMMAND, parse_command
+from bot.personas import RESET_COMMAND, parse_command
 from bot.prompt import build_messages
 from bot.ratelimit import RateLimiter
 from bot.reply import compose_reply, shape_reply
@@ -444,7 +444,6 @@ class BotService:
             self._switch_persona(command)
             return self._record(parsed, path_len, Decision.PERSONA_SWITCHED, persona=command)
         if command == RESET_COMMAND:
-            was = self.active_persona
             self._switch_persona(cfg.default_persona)
             text = cfg.persona_reset_message
             decision = Decision.ANSWERED_RESET

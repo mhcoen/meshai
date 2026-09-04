@@ -143,6 +143,11 @@ class Config:
             errors.append("fortune_jitter_min and fortune_cutoff_min must not be negative")
         if not self.fortune_prompt.strip() or "{subject}" not in self.fortune_prompt:
             errors.append("fortune_prompt must contain {subject}")
+        else:
+            try:
+                self.fortune_prompt.format(subject="x", date="y")
+            except (KeyError, IndexError, ValueError) as exc:
+                errors.append(f"fortune_prompt has a bad placeholder ({exc}); only {{subject}} and {{date}} are allowed")
         if self.reply_max_chars > 0 and len(self.fortune_prefix) + len(self.fortune_fallback) > self.reply_max_chars:
             errors.append("fortune_prefix plus fortune_fallback must fit in reply_max_chars")
         if not self.personas:

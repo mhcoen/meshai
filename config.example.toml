@@ -33,6 +33,13 @@ global_burst = 1
 sender_rate_per_min = 2.0         # per sender name (spoofable; the global limit is the real ceiling)
 sender_burst = 1
 
+[adaptive]
+adaptive_enabled = true           # scale the global limit by channel airtime (see README)
+utilization_poll_s = 10.0         # how often to read the radio's airtime/packet counters
+utilization_window_s = 60.0       # duty cycle is computed over this window
+duty_low = 0.05                   # at/above this duty cycle the global rate is halved
+duty_high = 0.15                  # at/above this it is paused; relaxes one step per poll with hysteresis
+
 [history]
 history_size = 20                 # ring buffer of recent channel lines, including the bot's own
 transcript_max_chars = 1500       # rendered transcript budget; truncated from the oldest end

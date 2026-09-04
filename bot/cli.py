@@ -18,6 +18,7 @@ from bot.history import History
 from bot.jsonlog import EventLog
 from bot.ratelimit import RateLimiter
 from bot.service import BotService, ChannelError
+from bot.utilization import UtilizationMonitor
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,19 +31,32 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
+    limiter = RateLimiter(
+        global_per_min=cfg.global_rate_per_min,
+        global_burst=cfg.global_burst,
+        sender_per_min=cfg.sender_rate_per_min,
+        sender_burst=cfg.sender_burst,
+    )
+    monitor = None
+    if cfg.adaptive_enabled:
+        monitor = UtilizationMonitor(
+            meshcore=meshcore,
+            limiter=limiter,
+            log=log,
+            poll_s=cfg.utilization_poll_s,
+            window_s=cfg.utilization_window_s,
+            duty_low=cfg.duty_low,
+            duty_high=cfg.duty_high,
+        )
     return BotService(
         cfg=cfg,
         meshcore=meshcore,
         backend=make_backend(cfg),
         gate=InjectionGate(threshold=cfg.vordur_threshold, sanitize=cfg.vordur_sanitize),
-        limiter=RateLimiter(
-            global_per_min=cfg.global_rate_per_min,
-            global_burst=cfg.global_burst,
-            sender_per_min=cfg.sender_rate_per_min,
-            sender_burst=cfg.sender_burst,
-        ),
+        limiter=limiter,
         history=History(cfg.history_size),
         log=log,
+        monitor=monitor,
     )
 
 
@@ -78,6 +92,7 @@ async def run(cfg: Config, headless: bool, log: EventLog) -> int:
         cfg=cfg,
         stats=service.stats,
         limiter=service.limiter,
+        monitor=service.monitor,
         subscribe_log=log.subscribe,
         run_service=run_service,
         stop_service=service.stop,

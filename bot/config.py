@@ -62,6 +62,13 @@ class Config:
     history_size: int = 20
     transcript_max_chars: int = 1500
 
+    # [adaptive]
+    adaptive_enabled: bool = True
+    utilization_poll_s: float = 10.0
+    utilization_window_s: float = 60.0
+    duty_low: float = 0.05
+    duty_high: float = 0.15
+
     # [vordur]
     vordur_threshold: float = 0.45
     vordur_sanitize: bool = False
@@ -101,6 +108,10 @@ class Config:
             errors.append("transcript_max_chars must not be negative")
         if not 0.0 <= self.vordur_threshold <= 1.0:
             errors.append("vordur_threshold must be between 0 and 1")
+        if self.utilization_poll_s <= 0 or self.utilization_window_s < self.utilization_poll_s:
+            errors.append("utilization_poll_s must be positive and no larger than utilization_window_s")
+        if not 0.0 <= self.duty_low < self.duty_high <= 1.0:
+            errors.append("need 0 <= duty_low < duty_high <= 1")
         if errors:
             raise ConfigError("; ".join(errors))
         return self

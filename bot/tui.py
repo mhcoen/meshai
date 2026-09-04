@@ -19,8 +19,8 @@ from bot.service import Stats
 class MeshAIApp(App[None]):
     TITLE = "MeshAI"
     CSS = """
-    Horizontal#top { height: 9; }
-    #status, #limits { width: 1fr; border: round $primary; padding: 0 1; }
+    Horizontal#top { height: 10; }
+    #status, #limits, #util { width: 1fr; border: round $primary; padding: 0 1; }
     #log { border: round $secondary; height: 1fr; }
     """
     BINDINGS = [
@@ -36,11 +36,13 @@ class MeshAIApp(App[None]):
         subscribe_log: Callable[[Callable[[dict[str, Any]], None]], None],
         run_service: Callable[[], Awaitable[None]],
         stop_service: Callable[[], Awaitable[None]],
+        monitor: Any = None,
     ):
         super().__init__()
         self._cfg = cfg
         self._stats = stats
         self._limiter = limiter
+        self._monitor = monitor
         self._subscribe_log = subscribe_log
         self._run_service = run_service
         self._stop_service = stop_service
@@ -52,6 +54,7 @@ class MeshAIApp(App[None]):
         with Horizontal(id="top"):
             yield Static(id="status")
             yield Static(id="limits")
+            yield Static(id="util")
         yield RichLog(id="log", highlight=False, markup=False, wrap=True, max_lines=2000)
         yield Footer()
 
@@ -83,10 +86,11 @@ class MeshAIApp(App[None]):
         status = (
             f"[b]Radio[/b]   {'CONNECTED' if s.connected else 'DISCONNECTED'}  {cfg.port}\n"
             f"[b]Channel[/b] {s.channel_name or '?'} (idx {cfg.channel_idx})\n"
-            f"[b]Model[/b]   {cfg.backend}:{cfg.model}   last latency {latency}\n"
+            f"[b]Model[/b]   {cfg.backend}:{cfg.model}\n"
+            f"         last latency {latency}\n"
             f"[b]Counts[/b]  in {s.received}  replies {s.replies_sent}  apologies {s.apologies_sent}\n"
-            f"         vordur-blocked {s.vordur_blocks}  rate-limited {s.rate_limited}  "
-            f"send-err {s.send_errors}  model-err {s.model_errors}"
+            f"         vordur-blocked {s.vordur_blocks}  rate-limited {s.rate_limited}\n"
+            f"         send-err {s.send_errors}  model-err {s.model_errors}"
         )
         snap = self._limiter.snapshot()
         senders = "\n".join(
@@ -94,12 +98,34 @@ class MeshAIApp(App[None]):
         ) or "  (none yet)"
         limits = (
             f"[b]Rate limits[/b]\n"
-            f"global  {snap['global_tokens']:.2f}/{snap['global_capacity']} tokens  "
-            f"({cfg.global_rate_per_min:g}/min)\n"
-            f"per-sender ({cfg.sender_rate_per_min:g}/min), recent:\n{senders}"
+            f"global  {snap['global_tokens']:.2f}/{snap['global_capacity']} tokens\n"
+            f"        {snap['global_per_min']:g}/min effective "
+            f"(configured {cfg.global_rate_per_min:g}/min x {snap['global_factor']:g})\n"
+            f"per-sender {cfg.sender_rate_per_min:g}/min, recent:\n{senders}"
         )
         self.query_one("#status", Static).update(status)
         self.query_one("#limits", Static).update(limits)
+        self.query_one("#util", Static).update(self._utilization_text())
+
+    def _utilization_text(self) -> str:
+        cfg = self._cfg
+        if self._monitor is None:
+            return "[b]Channel utilization[/b]\n(adaptive limiting off)"
+        m = self._monitor
+        u = m.current
+        head = (
+            f"[b]Channel utilization[/b]  level {m.level.upper()}\n"
+            f"thresholds {cfg.duty_low:.0%} half / {cfg.duty_high:.0%} pause, "
+            f"window {cfg.utilization_window_s:g}s, poll {cfg.utilization_poll_s:g}s\n"
+        )
+        if u is None:
+            return head + f"(warming up, polls {m.polls}, errors {m.errors})"
+        return head + (
+            f"duty cycle  {u.duty:.1%} over {u.window_s:.0f}s\n"
+            f"packets     {u.packets_per_min:.1f}/min\n"
+            f"noise floor {u.noise_floor} dBm  rssi {u.last_rssi}  snr {u.last_snr}\n"
+            f"polls {m.polls}  errors {m.errors}"
+        )
 
     def _on_record(self, record: dict[str, Any]) -> None:
         event = record.get("event")
@@ -117,11 +143,16 @@ class MeshAIApp(App[None]):
                 f"{ts} {record.get('sender', '?')!s:<16} hops={record.get('path_len')} "
                 f"{decision:<24} {record.get('prompt', '')!s}{extra}"
             )
-        elif event in ("startup", "shutdown", "connected", "disconnected", "send_error", "vordur_block", "shutdown_error"):
+        elif event == "rate_level":
+            line = f"{ts} [rate] {record.get('old')} -> {record.get('new')} at duty {record.get('duty')}"
+        elif event in (
+            "startup", "shutdown", "connected", "disconnected", "send_error", "vordur_block",
+            "shutdown_error", "utilization_error",
+        ):
             details = {k: v for k, v in record.items() if k not in ("ts", "event")}
             line = f"{ts} [{event}] {details}"
         else:
-            return
+            return  # per-poll utilization records are shown in the panel, not the log
         try:
             self.query_one("#log", RichLog).write(line)
         except Exception:  # noqa: BLE001 - widget may not be mounted yet

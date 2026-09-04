@@ -324,6 +324,26 @@ async def test_start_subscribes_with_channel_filter_and_stop_cleans_up(harness):
     await h.service.stop()  # idempotent
 
 
+async def test_monitor_is_started_and_stopped_with_the_service(harness):
+    class FakeMonitor:
+        def __init__(self):
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+
+        async def stop(self):
+            self.stopped = True
+
+    h = harness()
+    h.service.monitor = FakeMonitor()
+    await h.service.start()
+    assert h.service.monitor.started is True
+    await h.service.stop()
+    assert h.service.monitor.stopped is True
+
+
 async def test_start_refuses_empty_channel(harness):
     h = harness(channel_name="")
     with pytest.raises(ChannelError, match="empty"):

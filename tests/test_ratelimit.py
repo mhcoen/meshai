@@ -60,6 +60,46 @@ def test_sender_table_is_bounded(clock):
     assert set(rl.snapshot(recent=10)["senders"]) == {"b", "c", "d"}
 
 
+def test_set_rate_zero_pauses_refill_and_keeps_held_tokens(clock):
+    bucket = TokenBucket(rate_per_sec=1.0, capacity=2, clock=clock)
+    assert bucket.try_acquire()
+    bucket.set_rate(0.0)
+    clock.advance(1000)
+    assert bucket.peek() == 1.0  # the token already held survives; nothing new accrues
+    bucket.set_rate(1.0)
+    clock.advance(1)
+    assert bucket.peek() == 2.0  # refill resumes from the moment the rate was restored
+
+
+def test_set_rate_rejects_negative(clock):
+    with pytest.raises(ValueError):
+        TokenBucket(1.0, 1, clock).set_rate(-1)
+
+
+def test_global_factor_scales_only_the_global_bucket(clock):
+    rl = RateLimiter(global_per_min=2, global_burst=1, sender_per_min=60, sender_burst=1, clock=clock)
+    assert rl.allow("alice").allowed
+    rl.set_global_factor(0.5)  # 1/min effective
+    clock.advance(30)
+    assert not rl.allow("alice").allowed
+    clock.advance(30)
+    assert rl.allow("alice").allowed
+    rl.set_global_factor(0.0)
+    clock.advance(3600)
+    d = rl.allow("bob")
+    assert (d.allowed, d.reason) == (False, "global")
+    rl.set_global_factor(1.0)
+    clock.advance(30)
+    assert rl.allow("bob").allowed
+    assert rl.snapshot()["global_per_min"] == 2.0
+
+
+def test_global_factor_bounds(clock):
+    rl = RateLimiter(2, 1, 2, 1, clock=clock)
+    with pytest.raises(ValueError):
+        rl.set_global_factor(1.5)
+
+
 def test_snapshot_reports_state_for_the_ui(clock):
     rl = RateLimiter(global_per_min=1, global_burst=1, sender_per_min=1, sender_burst=1, clock=clock)
     rl.allow("alice")

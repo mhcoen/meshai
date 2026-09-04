@@ -20,7 +20,8 @@ sees from the channel (the prompt and the recent transcript) is labelled as
 untrusted in the model input, and the model's output is checked again before it
 is transmitted. The bot has no tools, no function calling, and no access to
 anything beyond the channel, so a successful injection can at worst produce one
-bad sentence, capped at 120 characters, once per minute.
+bad sentence, capped at 120 characters, at the rate-limited pace (one per 30 s
+by default, less when the channel is busy).
 
 ## Setup
 
@@ -101,6 +102,35 @@ it was dropped. Decisions: `answered`, `apology`, `dropped:loop-guard`,
 `dropped:no-trigger`, `dropped:too-long`, `dropped:vordur-blocked`,
 `dropped:rate-limited`, `dropped:empty-reply`, `dropped:send-failed`.
 
+## Adaptive rate limiting
+
+With `adaptive_enabled = true` (the default) a monitor task polls the radio
+every `utilization_poll_s` seconds for its cumulative airtime counters
+(`get_stats_radio`: transmit and receive seconds, noise floor, last RSSI/SNR)
+and packet counters (`get_stats_packets`). Over a sliding
+`utilization_window_s` window it computes the channel duty cycle, airtime
+divided by elapsed time, and packets per minute, and scales the **global**
+reply rate:
+
+| duty cycle | level | global rate |
+|---|---|---|
+| below `duty_low` | full | configured |
+| `duty_low` to `duty_high` | half | configured x 0.5 |
+| at or above `duty_high` | paused | 0, no replies |
+
+Tightening is immediate. Relaxing goes one level per poll and only once the
+duty cycle has fallen below 80% of the threshold that level guards, so a
+channel hovering at a threshold does not flap. Per-sender limits are not
+scaled. The monitor's reading, the current level, and the effective rate are
+shown in the TUI, logged as `utilization` records on every poll, and as
+`rate_level` records on each change.
+
+Airtime is what this radio heard or sent. A busy channel it cannot hear does
+not register; that is inherent to a node-local measurement. The counters are
+integer seconds, so a 60 s window resolves about 1.7 percentage points. If a
+stats poll fails the level is left as it is and a `utilization_error` record
+is written; the bot keeps running.
+
 ## Configuration reference
 
 `config.toml`, sections are cosmetic; every key is also an environment variable
@@ -127,6 +157,11 @@ it was dropped. Decisions: `answered`, `apology`, `dropped:loop-guard`,
 | `model_timeout_s` | `30.0` | Hard asyncio timeout on the model call |
 | `global_rate_per_min` / `global_burst` | `2.0` / `1` | Replies per minute, all senders |
 | `sender_rate_per_min` / `sender_burst` | `2.0` / `1` | Per sender name (spoofable) |
+| `adaptive_enabled` | `true` | Scale the global rate by channel duty cycle |
+| `utilization_poll_s` | `10.0` | Seconds between radio stats polls |
+| `utilization_window_s` | `60.0` | Sliding window for the duty-cycle computation |
+| `duty_low` | `0.05` | Duty cycle at which the global rate is halved |
+| `duty_high` | `0.15` | Duty cycle at which replies pause |
 | `history_size` | `20` | Ring buffer length |
 | `transcript_max_chars` | `1500` | Rendered transcript budget |
 | `vordur_threshold` | `0.45` | Block at or above this score; vordur's own cutoff is 0.45 |

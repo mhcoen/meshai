@@ -2,6 +2,8 @@
 
 Sender names are attacker-controlled, so the per-sender limit only protects against
 a *polite* flood; anyone can rotate names. The global bucket is the real ceiling.
+The global bucket's refill rate can be scaled at runtime (by the channel-utilization
+monitor); a factor of 0 pauses refill entirely.
 """
 
 from __future__ import annotations
@@ -27,6 +29,13 @@ class TokenBucket:
         elapsed = max(0.0, now - self._updated)
         self._tokens = min(float(self.capacity), self._tokens + elapsed * self.rate)
         self._updated = now
+
+    def set_rate(self, rate_per_sec: float) -> None:
+        """Change the refill rate from now on. Zero pauses refill; tokens already held remain."""
+        if rate_per_sec < 0:
+            raise ValueError("rate_per_sec must not be negative")
+        self._refill()
+        self.rate = float(rate_per_sec)
 
     def peek(self) -> float:
         """Current token count after refill, without consuming."""
@@ -60,7 +69,9 @@ class RateLimiter:
         max_senders: int = 512,
     ):
         self._clock = clock
-        self._global = TokenBucket(global_per_min / 60.0, global_burst, clock)
+        self._global_base_rate = global_per_min / 60.0
+        self._global_factor = 1.0
+        self._global = TokenBucket(self._global_base_rate, global_burst, clock)
         self._sender_rate = sender_per_min / 60.0
         self._sender_burst = sender_burst
         self._senders: OrderedDict[str, TokenBucket] = OrderedDict()
@@ -88,12 +99,25 @@ class RateLimiter:
         bucket.try_acquire()
         return LimitDecision(True, "")
 
+    @property
+    def global_factor(self) -> float:
+        return self._global_factor
+
+    def set_global_factor(self, factor: float) -> None:
+        """Scale the global refill rate: 1.0 = configured rate, 0.5 = half, 0.0 = paused."""
+        if not 0.0 <= factor <= 1.0:
+            raise ValueError("factor must be between 0 and 1")
+        self._global_factor = float(factor)
+        self._global.set_rate(self._global_base_rate * self._global_factor)
+
     def snapshot(self, recent: int = 5) -> dict:
         """State for the monitoring UI."""
         senders = list(self._senders.items())[-recent:]
         return {
             "global_tokens": round(self._global.peek(), 2),
             "global_capacity": self._global.capacity,
+            "global_factor": self._global_factor,
+            "global_per_min": round(self._global_base_rate * self._global_factor * 60.0, 3),
             "senders": {name: round(b.peek(), 2) for name, b in senders},
             "sender_capacity": self._sender_burst,
         }

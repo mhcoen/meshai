@@ -78,6 +78,7 @@ class BotService:
         history: History,
         log: EventLog,
         clock: Callable[[], float] = time.monotonic,
+        monitor: Any = None,
     ):
         self.cfg = cfg
         self.mc = meshcore
@@ -86,6 +87,7 @@ class BotService:
         self.limiter = limiter
         self.history = history
         self.log = log
+        self.monitor = monitor  # optional UtilizationMonitor; started/stopped with the service
         self._clock = clock
         self.stats = Stats(channel_idx=cfg.channel_idx)
         self._subs: list[Any] = []
@@ -126,11 +128,15 @@ class BotService:
         self._subs.append(self.mc.subscribe(EventType.CONNECTED, self._on_connected))
         self._subs.append(self.mc.subscribe(EventType.DISCONNECTED, self._on_disconnected))
         await self.mc.start_auto_message_fetching()
+        if self.monitor is not None:
+            self.monitor.start()
 
     async def stop(self) -> None:
         if self._stopped:
             return
         self._stopped = True
+        if self.monitor is not None:
+            await self.monitor.stop()
         for sub in self._subs:
             try:
                 self.mc.unsubscribe(sub)

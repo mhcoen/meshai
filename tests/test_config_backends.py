@@ -22,6 +22,8 @@ def test_defaults_match_the_agreed_setup():
     assert cfg.global_rate_per_min == 4.0
     assert cfg.sender_rate_per_min == 4.0
     assert cfg.injection_threshold == 0.45
+    assert cfg.default_persona == "funny" and set(cfg.personas) == {"funny", "snarky", "marvin", "pirate", "haiku"}
+    assert cfg.persona_timeout_min == 120 and cfg.command_prefix == "/"
     assert cfg.adaptive_enabled is True
     assert (cfg.duty_low, cfg.duty_high, cfg.tx_duty_budget) == (0.05, 0.15, 0.02)
     assert (cfg.utilization_poll_s, cfg.utilization_window_s) == (10.0, 60.0)
@@ -61,6 +63,15 @@ def test_missing_port_is_rejected():
         {"duty_low": 0.2, "duty_high": 0.1},
         {"tx_duty_budget": 0},
         {"tx_duty_budget": 0.9},
+        {"default_persona": "nope"},
+        {"personas": {"Bad Name": "x"}},
+        {"personas": {"help": "x"}, "default_persona": "help"},
+        {"persona_timeout_min": 0},
+        {"fortune_time": "6am"},
+        {"fortune_prompt": "no subject here"},
+        {"fortune_prompt": "about {subject} at {when}"},
+        {"fortune_prefix": "x" * 100, "fortune_fallback": "y" * 60},
+        {"command_prefix": ""},
         {"duty_high": 1.5},
         {"utilization_poll_s": 0},
         {"utilization_poll_s": 30, "utilization_window_s": 10},

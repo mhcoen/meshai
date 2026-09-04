@@ -21,6 +21,7 @@ from bot.history import History
 from bot.jsonlog import EventLog
 from bot.ratelimit import RateLimiter
 from bot.service import BotService, ChannelError
+from bot.fortune import FortuneScheduler
 from bot.utilization import UtilizationMonitor
 
 
@@ -57,7 +58,7 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
             duty_high=cfg.duty_high,
             tx_budget=cfg.tx_duty_budget,
         )
-    return BotService(
+    service = BotService(
         cfg=cfg,
         meshcore=meshcore,
         backend=make_backend(cfg),
@@ -67,6 +68,18 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
         log=log,
         monitor=monitor,
     )
+    if cfg.fortune_enabled:
+        service.fortune = FortuneScheduler(
+            service=service,
+            log=log,
+            hhmm=cfg.fortune_time,
+            jitter_min=cfg.fortune_jitter_min,
+            cutoff_min=cfg.fortune_cutoff_min,
+            prefix=cfg.fortune_prefix,
+            prompt=cfg.fortune_prompt,
+            fallback=cfg.fortune_fallback,
+        )
+    return service
 
 
 class ConnectError(RuntimeError):
@@ -175,6 +188,7 @@ async def run(cfg: Config, headless: bool, log: EventLog) -> int:
         stats=service.stats,
         limiter=service.limiter,
         monitor=service.monitor,
+        fortune=service.fortune,
         subscribe_log=log.subscribe,
         run_service=run_service,
         stop_service=service.stop,

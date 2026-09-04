@@ -29,6 +29,7 @@ from bot.guard import InjectionGate
 from bot.history import History, HistoryEntry, render_transcript
 from bot.jsonlog import EventLog
 from bot.parse import extract_prompt, parse_channel_text
+from bot.personas import RESET_COMMAND, parse_command
 from bot.prompt import build_messages
 from bot.ratelimit import RateLimiter
 from bot.reply import compose_reply, shape_reply
@@ -37,6 +38,9 @@ from bot.reply import compose_reply, shape_reply
 class Decision(str, Enum):
     ANSWERED = "answered"
     ANSWERED_FALLBACK = "answered:too-long-fallback"
+    ANSWERED_HELP = "answered:help"
+    ANSWERED_RESET = "answered:reset"
+    PERSONA_SWITCHED = "persona-switched"
     APOLOGY = "apology"
     DROP_LOOP_GUARD = "dropped:loop-guard"
     DROP_NO_TRIGGER = "dropped:no-trigger"
@@ -66,6 +70,10 @@ class Stats:
     model_errors: int = 0
     shorten_retries: int = 0
     fallbacks_sent: int = 0
+    persona: str = ""
+    persona_expires_at: float | None = None  # wall clock (time.time) for display
+    persona_switches: int = 0
+    posts_sent: int = 0  # unsolicited posts: fortunes, reset notices
     last_latency_ms: float | None = None
     last_decision: str = ""
     started_at: float = field(default_factory=time.time)
@@ -83,6 +91,7 @@ class BotService:
         log: EventLog,
         clock: Callable[[], float] = time.monotonic,
         monitor: Any = None,
+        fortune: Any = None,
     ):
         self.cfg = cfg
         self.mc = meshcore
@@ -92,11 +101,16 @@ class BotService:
         self.history = history
         self.log = log
         self.monitor = monitor  # optional UtilizationMonitor; started/stopped with the service
+        self.fortune = fortune  # optional FortuneScheduler; started/stopped with the service
         self._clock = clock
-        self.stats = Stats(channel_idx=cfg.channel_idx)
+        self.stats = Stats(channel_idx=cfg.channel_idx, persona=cfg.default_persona)
         self._subs: list[Any] = []
         self._stopped = False
         self._last_sent: str | None = None
+        self.active_persona = cfg.default_persona
+        self._persona_deadline: float | None = None  # monotonic clock value
+        self._persona_task: asyncio.Task[None] | None = None
+        self.timer_tick_s = 30.0  # how often the persona timer re-checks the clock (tests shrink it)
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -134,11 +148,16 @@ class BotService:
         await self.mc.start_auto_message_fetching()
         if self.monitor is not None:
             self.monitor.start()
+        if self.fortune is not None:
+            self.fortune.start()
 
     async def stop(self) -> None:
         if self._stopped:
             return
         self._stopped = True
+        await self._cancel_persona_timer()
+        if self.fortune is not None:
+            await self.fortune.stop()
         if self.monitor is not None:
             await self.monitor.stop()
         for sub in self._subs:
@@ -228,6 +247,11 @@ class BotService:
         if prompt is None:
             return self._record(parsed, path_len, Decision.DROP_NO_TRIGGER)
 
+        # 2b. Commands: a preset name switches the voice silently; help and reset transmit.
+        command = parse_command(prompt, cfg.command_prefix)
+        if command is not None:
+            return await self._handle_command(parsed, path_len, command, received_at)
+
         # 3. Length.
         if len(prompt) > cfg.prompt_max_chars:
             return self._record(
@@ -274,39 +298,15 @@ class BotService:
         # Models overshoot a stated character budget by 10 to 20 percent, so state 80 percent of
         # the real room; the hard cap in compose_reply still enforces the true limit.
         budget = max(1, int((cfg.reply_max_chars - prefix_len) * 0.8))
-        messages = build_messages(cfg.bot_name, budget, transcript, prompt, cfg.persona)
+        messages = build_messages(cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona])
 
         # Model, under a hard timeout per call. A reply that does not fit goes back to the
         # model with the exact limit; nothing is ever cut mid-sentence.
         available = cfg.reply_max_chars - prefix_len
         started = self._clock()
-        retries = 0
         fallback = False
         try:
-            raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
-            shaped = shape_reply(raw)
-            while len(shaped) > available and retries < cfg.shorten_retries:
-                retries += 1
-                self.stats.shorten_retries += 1
-                # Models count words far better than characters: a word budget fit 5/5 tight
-                # cases after one retry where a character budget fit 1/5.
-                target = available if retries == 1 else max(20, int(available * 0.7))
-                words = max(3, target // 7)
-                messages = messages + [
-                    {"role": "assistant", "content": shaped},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"That reply was {len(shaped)} characters and the hard limit is {available}. "
-                            f"Rewrite it as one plain sentence of at most {words} words that keeps the answer. "
-                            "Reply with the sentence only."
-                        ),
-                    },
-                ]
-                raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
-                shaped = shape_reply(raw)
-            latency_ms = round((self._clock() - started) * 1000.0, 1)
-            self.stats.last_latency_ms = latency_ms
+            shaped, retries, latency_ms = await self._generate_fitting(messages, available)
         except asyncio.TimeoutError:
             self.stats.model_errors += 1
             self.stats.last_latency_ms = round((self._clock() - started) * 1000.0, 1)
@@ -353,6 +353,185 @@ class BotService:
         entries = self.history.entries()[:-1]
         lines = [e.line() for e in entries if not e.flagged]
         return render_transcript(lines, self.cfg.transcript_max_chars)
+
+    # ------------------------------------------------------------------ generation
+
+    async def _generate_fitting(self, messages: list[dict[str, str]], available: int) -> tuple[str, int, float]:
+        """Call the model, sending a too-long reply back with a word budget up to shorten_retries times.
+
+        Returns (shaped text, retries used, latency in ms). The text may still exceed
+        ``available`` after the retries; the caller decides what to send then. Raises on
+        timeout or backend error, per call, under the configured model timeout.
+        """
+        cfg = self.cfg
+        started = self._clock()
+        retries = 0
+        raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
+        shaped = shape_reply(raw)
+        while len(shaped) > available and retries < cfg.shorten_retries:
+            retries += 1
+            self.stats.shorten_retries += 1
+            # Models count words far better than characters: a word budget fit 5/5 tight
+            # cases after one retry where a character budget fit 1/5.
+            target = available if retries == 1 else max(20, int(available * 0.7))
+            words = max(3, target // 7)
+            messages = messages + [
+                {"role": "assistant", "content": shaped},
+                {
+                    "role": "user",
+                    "content": (
+                        f"That reply was {len(shaped)} characters and the hard limit is {available}. "
+                        f"Rewrite it as one plain sentence of at most {words} words that keeps the answer. "
+                        "Reply with the sentence only."
+                    ),
+                },
+            ]
+            raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
+            shaped = shape_reply(raw)
+        latency_ms = round((self._clock() - started) * 1000.0, 1)
+        self.stats.last_latency_ms = latency_ms
+        return shaped, retries, latency_ms
+
+    async def post_generated(self, prefix: str, request: str, fallback: str, what: str) -> str:
+        """Generate an unsolicited post in the active voice and transmit it.
+
+        Same path as a reply: limiter token first (no model call without one), the
+        shortening retries, the fixed fallback if it still does not fit, the injection
+        gate, the cap. Returns "sent", "rate-limited", "model-error", "blocked",
+        "send-failed", or "no-room".
+        """
+        cfg = self.cfg
+        if not self.limiter.allow(cfg.bot_name).allowed:
+            return "rate-limited"
+        available = cfg.reply_max_chars - len(prefix)
+        if available <= 0:
+            return "no-room"
+        budget = max(1, int(available * 0.8))
+        messages = build_messages(cfg.bot_name, budget, "", request, cfg.personas[self.active_persona])
+        try:
+            shaped, retries, latency_ms = await self._generate_fitting(messages, available)
+        except asyncio.TimeoutError:
+            self.stats.model_errors += 1
+            self.log.emit("post_error", what=what, error="timeout")
+            return "model-error"
+        except Exception as exc:  # noqa: BLE001
+            self.stats.model_errors += 1
+            self.log.emit("post_error", what=what, error=f"{type(exc).__name__}: {exc}")
+            return "model-error"
+        used_fallback = False
+        if len(shaped) > available:
+            used_fallback = True
+            self.stats.fallbacks_sent += 1
+            self.log.emit("reply_too_long", what=what, length=len(shaped), limit=available, retries=retries)
+            shaped = fallback
+        verdict = self.gate.check(shaped)
+        if verdict.blocked:
+            self.stats.injection_blocks += 1
+            self.log.emit("injection_block", point=what, score=verdict.score, rules=list(verdict.rules), error=verdict.error)
+            return "blocked"
+        text = (prefix + shaped)[: cfg.reply_max_chars]  # the fallback is validated to fit; model text already does
+        if not await self._send(text):
+            return "send-failed"
+        self.stats.posts_sent += 1
+        self.log.emit("post", what=what, text=text, retries=retries, latency_ms=latency_ms, fallback=used_fallback)
+        return "sent"
+
+    # ------------------------------------------------------------------ personalities
+
+    async def _handle_command(self, parsed, path_len, command: str, received_at: float) -> Decision:
+        cfg = self.cfg
+        if command in cfg.personas:
+            self._switch_persona(command)
+            return self._record(parsed, path_len, Decision.PERSONA_SWITCHED, persona=command)
+        if command == RESET_COMMAND:
+            self._switch_persona(cfg.default_persona)
+            text = cfg.persona_reset_message
+            decision = Decision.ANSWERED_RESET
+        else:
+            text = cfg.help_message  # help, or anything unrecognised
+            decision = Decision.ANSWERED_HELP
+        limit = self.limiter.allow(parsed.sender)
+        if not limit.allowed:
+            self.stats.rate_limited += 1
+            return self._record(parsed, path_len, Decision.DROP_RATE_LIMITED, reason=limit.reason, command=command)
+        reply = compose_reply(parsed.sender, text, cfg.reply_max_chars)
+        if reply is None:
+            return self._record(parsed, path_len, Decision.DROP_EMPTY, command=command)
+        held_ms = await self._hold_for_quiet_channel(received_at)
+        if await self._send(reply):
+            self.stats.replies_sent += 1
+            return self._record(parsed, path_len, decision, reply=reply, held_ms=held_ms, command=command)
+        return self._record(parsed, path_len, Decision.DROP_SEND_FAILED, reply=reply, command=command)
+
+    def _switch_persona(self, name: str) -> None:
+        """Activate a preset. The default carries no timer; anything else reverts after the timeout."""
+        cfg = self.cfg
+        previous = self.active_persona
+        self.active_persona = name
+        self.stats.persona = name
+        if name == cfg.default_persona:
+            self._persona_deadline = None
+            self.stats.persona_expires_at = None
+            self._start_persona_timer(cancel_only=True)
+        else:
+            self._persona_deadline = self._clock() + cfg.persona_timeout_min * 60.0
+            self.stats.persona_expires_at = time.time() + cfg.persona_timeout_min * 60.0
+            self._start_persona_timer()
+        if name != previous:
+            self.stats.persona_switches += 1
+            self.log.emit("persona_switch", old=previous, new=name, minutes=cfg.persona_timeout_min if name != cfg.default_persona else None)
+
+    def _start_persona_timer(self, cancel_only: bool = False) -> None:
+        if self._persona_task is not None and not self._persona_task.done():
+            self._persona_task.cancel()
+        self._persona_task = None
+        if not cancel_only:
+            self._persona_task = asyncio.create_task(self._persona_timer(), name="persona-timer")
+
+    async def _cancel_persona_timer(self) -> None:
+        task = self._persona_task
+        self._persona_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+
+    async def _persona_timer(self) -> None:
+        """Revert to the default when the deadline passes, then announce it when a token allows."""
+        try:
+            while self._persona_deadline is not None and self._clock() < self._persona_deadline:
+                await asyncio.sleep(min(self.timer_tick_s, max(0.0, self._persona_deadline - self._clock())))
+            if self._persona_deadline is None:
+                return
+            expired = self.active_persona
+            self.active_persona = self.cfg.default_persona
+            self.stats.persona = self.cfg.default_persona
+            self._persona_deadline = None
+            self.stats.persona_expires_at = None
+            self.log.emit("persona_reset", old=expired, new=self.cfg.default_persona)
+            await self._announce(self.cfg.persona_reset_message, "persona_reset_message", give_up_after_s=600.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the timer must never take the bot down
+            self.log.emit("persona_timer_error", error=f"{type(exc).__name__}: {exc}")
+
+    async def _announce(self, text: str, what: str, give_up_after_s: float) -> bool:
+        """Post an unsolicited line once the global limiter allows it, retrying within a window."""
+        deadline = self._clock() + give_up_after_s
+        while True:
+            if self.limiter.allow(self.cfg.bot_name).allowed:
+                if await self._send(text):
+                    self.stats.replies_sent += 1
+                    self.log.emit("announce", what=what, text=text)
+                    return True
+                self.log.emit("announce_failed", what=what, reason="send-failed")
+                return False
+            if self._clock() >= deadline:
+                self.log.emit("announce_failed", what=what, reason="rate-limited past the window")
+                return False
+            await asyncio.sleep(min(self.timer_tick_s, max(0.0, deadline - self._clock())))
 
     async def _hold_for_quiet_channel(self, received_at: float) -> float:
         """Wait out the flood of the question before transmitting.

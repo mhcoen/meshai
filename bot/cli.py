@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import signal
 import sys
 from collections.abc import Sequence
@@ -26,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="config.toml", help="path to the TOML config (default: config.toml)")
     parser.add_argument("--headless", action="store_true", help="no TUI; JSON log only")
     parser.add_argument("--log-file", default=None, help="override log_file from config")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="also write meshcore's frame-level debug logging to <log file>.debug (or stderr when headless)",
+    )
     parser.add_argument("--version", action="version", version=f"meshai {__version__}")
     return parser
 
@@ -114,6 +120,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 1
     log_path = args.log_file if args.log_file is not None else (cfg.log_file or None)
+    if log_path is None and not args.headless:
+        log_path = "meshai.jsonl"  # the TUI owns the terminal, so stderr is not a usable log target
+        print(f"JSON log: {log_path}", file=sys.stderr)
+    if args.debug:
+        debug_target = f"{log_path}.debug" if log_path else None
+        logging.basicConfig(
+            level=logging.DEBUG,
+            filename=debug_target,
+            format="%(asctime)s %(name)s %(levelname)s %(message)s",
+        )
     log = EventLog(path=log_path)
     try:
         return asyncio.run(run(cfg, headless=args.headless, log=log))

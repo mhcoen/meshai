@@ -36,7 +36,9 @@ channel utilisation, and every message with the bot's decision on it:
 
 ## Features
 
-- Answers on one MeshCore channel, optionally only to messages with a prefix
+- Serves one MeshCore channel and answers every message on it; on a shared
+  channel, set `trigger_prefix` so it answers only messages that start with
+  a keyword such as `!ai`
 - Local model through Ollama, or any OpenAI compatible chat endpoint
 - One sentence replies, plain ASCII, one byte per character on the air, capped
   at 150 characters, which is all the radio will carry

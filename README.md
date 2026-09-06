@@ -491,7 +491,7 @@ any key may appear in any section.
 | `history_size` | `20` | Channel lines kept in memory |
 | `transcript_max_chars` | `1500` | Size of the transcript given to the model |
 | `person_memory_rounds` | `20` | Answered exchanges remembered per sender name |
-| `person_memory_days` | `7` | Rounds older than this are dropped |
+| `person_memory_days` | `14` | Rounds older than this are dropped |
 | `person_memory_people` | `500` | Names remembered at once, least recently seen out first |
 | `person_memory_max_chars` | `600` | Size of the remembered block given to the model |
 | `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |
@@ -561,7 +561,7 @@ are not.
 
 Garbage collection has three parts, each a config key: rounds beyond the
 per-person cap fall off the old end; rounds older than `person_memory_days`
-(7) are dropped; and no more than `person_memory_people` (500) names are
+(14) are dropped; and no more than `person_memory_people` (500) names are
 held at once, least recently seen out first, which is also what stops a
 name-rotating flood from filling it. `/forget` wipes the bot's memory of
 the sender that sent it. Everything is in memory only and a restart clears
@@ -570,6 +570,14 @@ it.
 Sender names are not authenticated, so this is continuity for a
 conversation, not identity: anyone can claim a name and inherit its
 context.
+
+Why the model input is ordered prompt, then the sender's memory, then the
+channel history: the history is the most hostile block, since anyone in
+range wrote it, and the model was measured to follow planted instructions
+far less when that block comes last. The memory block holds only prompts
+that passed the injection gate and were answered, plus the bot's own
+replies, so it is nearer to trusted and sits next to the question, where a
+follow-up needs it. The injection check runs over all three together.
 
 ### The daily fortune
 

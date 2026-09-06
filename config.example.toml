@@ -61,7 +61,7 @@ tx_duty_budget = 0.02             # THE DIAL: share of channel time the bot may 
 history_size = 20                 # ring buffer of recent channel lines, including the bot's own
 transcript_max_chars = 1500       # rendered transcript budget; truncated from the oldest end
 person_memory_rounds = 20         # answered exchanges remembered per sender name
-person_memory_days = 7            # rounds older than this are dropped
+person_memory_days = 14            # rounds older than this are dropped
 person_memory_people = 500        # names remembered at once, least recently seen out first
 person_memory_max_chars = 600     # size of the remembered block given to the model
 

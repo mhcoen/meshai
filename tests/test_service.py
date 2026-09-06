@@ -272,12 +272,6 @@ async def test_long_sender_name_leaves_no_room_and_nothing_is_sent(harness):
     assert h.sent == []
 
 
-async def test_empty_model_reply_is_not_sent(harness):
-    h = harness(backend=FakeBackend(reply="   "))
-    assert await h.say("Alice: q") is Decision.DROP_EMPTY
-    assert h.sent == []
-
-
 # ----------------------------------------------------------------------------- send path
 
 
@@ -359,6 +353,33 @@ async def test_assembled_context_is_checked_as_one_unit(harness):
     assert await h.say("Alice: !ai beta") is Decision.DROP_INJECTION
     assert h.inbound_records()[-1]["point"] == "context"
     assert h.backend.calls == [] and h.sent == []
+
+
+async def test_a_context_block_costs_no_rate_limit_token(harness):
+    """A message blocked at the context step must not spend the global token (a silencing lever)."""
+
+    class ComboGate:
+        threshold = 0.45
+
+        def check(self, text):
+            from bot.guard import Verdict
+
+            blocked = "alpha" in text and "beta" in text
+            return Verdict(blocked=blocked, score=1.0 if blocked else 0.0, rules=("combo",) if blocked else (), text=text)
+
+    h = harness(gate=ComboGate(), trigger_prefix="!ai ")
+    await h.say("Mallory: alpha")  # no trigger: history only
+    assert await h.say("Mallory: !ai beta") is Decision.DROP_INJECTION
+    assert h.limiter.snapshot()["global_tokens"] == 1.0  # untouched
+    assert h.limiter.allow("Alice").allowed  # someone else can still be answered
+
+
+async def test_empty_model_reply_sends_the_apology_not_silence(harness):
+    h = harness(backend=FakeBackend(reply="   "))
+    assert await h.say("Alice: q") is Decision.APOLOGY
+    assert h.sent == [(1, "@[Alice] " + h.cfg.apology)]
+    assert h.inbound_records()[-1]["model_error"] == "empty reply"
+    assert h.service.memory.rounds_for("Alice") == []
 
 
 async def test_injection_error_fails_closed_no_model_no_send(harness, monkeypatch):

@@ -64,7 +64,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 229 tests that need no radio, no model, and no network
+- 233 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -342,18 +342,19 @@ part is whatever the sending node put there; nothing verifies it.
 4. **Length.** Prompts over `prompt_max_chars` are dropped.
 5. **Injection check, prompt.** Dropped if the injection score is at or above
    `injection_threshold`.
-6. **Rate limits.** A global token bucket and one per sender name. Tokens are
-   taken here, once, and whatever goes out for this message rides on them.
-   When a bucket is empty the message is dropped and logged.
-7. **Context.** The sender's remembered exchanges (see [Per-person memory](#per-person-memory)) and the last `history_size` channel lines, including the bot's
+6. **Context.** The sender's remembered exchanges (see [Per-person memory](#per-person-memory)) and the last `history_size` channel lines, including the bot's
    own posts and excluding lines the detector flagged when they arrived, are
    rendered as `Sender: text`, trimmed from the oldest end to
    `transcript_max_chars`, and placed in one user message after the current
    prompt, between markers that label them as untrusted. History is never
    replayed as earlier chat turns.
-8. **Injection check, context.** The transcript, the sender's remembered
+7. **Injection check, context.** The transcript, the sender's remembered
    exchanges, and the prompt together, so fragments that pass one at a time
-   but add up to an instruction are caught here.
+   but add up to an instruction are caught here. This runs before any rate-limit token is
+   spent, so a message blocked here costs the bot nothing.
+8. **Rate limits.** A global token bucket and one per sender name. Tokens are
+   taken here, once, and whatever goes out for this message rides on them.
+   When a bucket is empty the message is dropped and logged.
 9. **Model.** One call under a hard timeout of `model_timeout_s`. On a
    timeout or any error the fixed `apology` text is posted instead.
 10. **Shape.** Strip any leaked `<think>` block, collapse whitespace, reduce

@@ -119,6 +119,10 @@ class Config:
             errors.append("channel_idx must be in 0..255")
         if not self.bot_name.strip():
             errors.append("bot_name must not be empty")
+        if ":" in self.bot_name:
+            errors.append("bot_name must not contain a colon; the radio uses 'name: text' on the channel")
+        if self.reply_max_chars > 0 and len(self.apology) > self.reply_max_chars - len("@[") - 20 - len("] "):
+            errors.append("apology must fit after '@[sender] ' with room for a 20 character name")
         if self.backend not in BACKENDS:
             errors.append(f"backend must be one of {BACKENDS}")
         if self.rx_log not in RX_LOG_MODES:

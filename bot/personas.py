@@ -11,6 +11,35 @@ from __future__ import annotations
 import re
 
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
+
+# Carried by every personality. Small models default to textbook meanings of radio terms,
+# and the mesh uses some of them the other way round.
+LORA_FACTS = (
+    "Facts about this mesh: it runs MeshCore over LoRa; channel messages are flooded and repeated by "
+    "repeaters and carry at most 160 bytes. Coding rate is written 4/5 to 4/8: 4/5 has the least error "
+    "correction and the most throughput, 4/8 has the most error correction and the least throughput, and "
+    "here 'higher coding rate' means more error correction. "
+    "A higher spreading factor, SF7 up to SF12, gives longer range but a lower data rate and roughly "
+    "double the airtime per step. A narrower bandwidth such as 62.5 kHz hears weaker signals than 125 or "
+    "250 kHz at the cost of airtime. RSSI is signal strength in dBm, more negative is weaker; SNR is "
+    "signal above noise in dB, and LoRa still decodes several dB below zero."
+)
+
+
+def radio_facts(info: dict) -> str:
+    """One line describing the radio the bot runs on, from the companion's self info."""
+    parts = []
+    if info.get("radio_freq"):
+        parts.append(f"{info['radio_freq']} MHz")
+    if info.get("radio_bw"):
+        parts.append(f"{info['radio_bw']} kHz bandwidth")
+    if info.get("radio_sf"):
+        parts.append(f"SF{info['radio_sf']}")
+    if info.get("radio_cr"):
+        parts.append(f"coding rate 4/{info['radio_cr']}")
+    if info.get("tx_power") is not None:
+        parts.append(f"{info['tx_power']} dBm")
+    return ("This radio is set to " + ", ".join(parts) + ".") if parts else ""
 HELP_COMMAND = "help"
 RESET_COMMAND = "reset"
 

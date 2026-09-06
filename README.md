@@ -62,7 +62,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 212 tests that need no radio, no model, and no network
+- 218 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -436,6 +436,7 @@ any key may appear in any section.
 | `shorten_retries` | `2` | Times a reply that does not fit goes back to the model with the exact limit |
 | `too_long_reply` | `That answer will not fit in one message, ask me something narrower.` | Sent when it still does not fit after the retries |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
+| `facts` | `""` | Local facts added to the system prompt after the built-in LoRa facts and the radio's own settings |
 | `[personas]` | five built-ins | Table of name = text presets; see [Personalities](#personalities) |
 | `default_persona` | `funny` | The preset active at start and after a reset |
 | `persona_timeout_min` | `120` | A switched personality reverts after this long |
@@ -510,6 +511,14 @@ Writing a preset for a small model:
   misapplies them.
 - Do not give the persona a label noun; it gets quoted back when someone
   asks what the bot is.
+
+Every personality also carries a short block of LoRa facts (how coding
+rate, spreading factor, bandwidth, RSSI, and SNR read on a mesh, where the
+textbook meaning and the mesh meaning differ) and the radio's own settings
+read from the companion at startup, so the bot knows its frequency,
+bandwidth, spreading factor, coding rate, and power. Add local facts with
+the `facts` key: where the mesh is, what the repeaters are called, anything
+people are likely to ask.
 
 `temperature` matters too: 0.3 gives flat and reliable, 0.6 (the default)
 gives a persona room, above 0.8 gets loose. Restart the bot after changing

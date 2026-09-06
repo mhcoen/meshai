@@ -38,15 +38,17 @@ _SYSTEM_TEMPLATE = (
 )
 
 
-def build_system_prompt(bot_name: str, char_budget: int, persona: str = "") -> str:
+def build_system_prompt(bot_name: str, char_budget: int, persona: str = "", facts: str = "") -> str:
     persona_text = persona.strip()
     if persona_text and not persona_text.endswith((".", "!", "?")):
         persona_text += "."
-    return _SYSTEM_TEMPLATE.format(
+    prompt = _SYSTEM_TEMPLATE.format(
         bot_name=bot_name,
         persona=(persona_text + " ") if persona_text else "",
         budget=char_budget,
     )
+    facts_text = " ".join(facts.split())
+    return f"{prompt} {facts_text}" if facts_text else prompt
 
 
 def build_user_message(transcript: str, prompt: str) -> str:
@@ -64,8 +66,9 @@ def build_messages(
     transcript: str,
     prompt: str,
     persona: str = "",
+    facts: str = "",
 ) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": build_system_prompt(bot_name, char_budget, persona)},
+        {"role": "system", "content": build_system_prompt(bot_name, char_budget, persona, facts)},
         {"role": "user", "content": build_user_message(transcript, prompt)},
     ]

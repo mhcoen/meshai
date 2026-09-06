@@ -29,7 +29,7 @@ from bot.guard import InjectionGate
 from bot.history import History, HistoryEntry, render_transcript
 from bot.jsonlog import EventLog
 from bot.parse import extract_prompt, parse_channel_text
-from bot.personas import RESET_COMMAND, parse_command
+from bot.personas import LORA_FACTS, RESET_COMMAND, parse_command, radio_facts
 from bot.prompt import build_messages
 from bot.ratelimit import RateLimiter
 from bot.reply import compose_reply, shape_reply
@@ -109,6 +109,7 @@ class BotService:
         self._stopped = False
         self._last_sent: str | None = None
         self.active_persona = cfg.default_persona
+        self.facts = self._compose_facts({})
         self._channel_hash: str | None = None
         self._persona_deadline: float | None = None  # monotonic clock value
         self._persona_task: asyncio.Task[None] | None = None
@@ -129,6 +130,7 @@ class BotService:
             )
         self.stats.channel_name = name
         self._channel_hash = (result.payload or {}).get("channel_hash")
+        self.facts = self._compose_facts(getattr(self.mc, "self_info", None) or {})
         self.stats.connected = bool(getattr(self.mc, "is_connected", True))
         self.log.emit(
             "startup",
@@ -328,7 +330,9 @@ class BotService:
         # Models overshoot a stated character budget by 10 to 20 percent, so state 80 percent of
         # the real room; the hard cap in compose_reply still enforces the true limit.
         budget = max(1, int((cfg.reply_max_chars - prefix_len) * 0.8))
-        messages = build_messages(cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona])
+        messages = build_messages(
+            cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona], self.facts
+        )
 
         # Model, under a hard timeout per call. A reply that does not fit goes back to the
         # model with the exact limit; nothing is ever cut mid-sentence.
@@ -384,6 +388,12 @@ class BotService:
         lines = [e.line() for e in entries if not e.flagged]
         return render_transcript(lines, self.cfg.transcript_max_chars)
 
+    # ------------------------------------------------------------------ facts
+
+    def _compose_facts(self, info: dict) -> str:
+        """Built-in LoRa facts, the radio's own settings, then whatever the config adds."""
+        return " ".join(part for part in (LORA_FACTS, radio_facts(info), self.cfg.facts.strip()) if part)
+
     # ------------------------------------------------------------------ generation
 
     async def _generate_fitting(self, messages: list[dict[str, str]], available: int) -> tuple[str, int, float]:
@@ -437,7 +447,7 @@ class BotService:
         if available <= 0:
             return "no-room"
         budget = max(1, int(available * 0.8))
-        messages = build_messages(cfg.bot_name, budget, "", request, cfg.personas[self.active_persona])
+        messages = build_messages(cfg.bot_name, budget, "", request, cfg.personas[self.active_persona], self.facts)
         try:
             shaped, retries, latency_ms = await self._generate_fitting(messages, available)
         except asyncio.TimeoutError:

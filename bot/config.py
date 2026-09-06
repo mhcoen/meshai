@@ -92,7 +92,7 @@ class Config:
     history_size: int = 20
     transcript_max_chars: int = 1500
     person_memory_rounds: int = 20  # answered exchanges remembered per sender name
-    person_memory_days: float = 7.0  # rounds older than this are dropped
+    person_memory_days: float = 14.0  # rounds older than this are dropped
     person_memory_people: int = 500  # names remembered at once, least recently seen out first
     person_memory_max_chars: int = 600  # size of the remembered block given to the model
 

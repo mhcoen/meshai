@@ -36,37 +36,38 @@ channel utilisation, and every message with the bot's decision on it:
 
 ## Features
 
+## Features
+
 - Answers every message on one MeshCore channel. On a shared channel, an
   optional trigger prefix such as `!ai` limits it to messages meant for it
+- Per-person memory of recent exchanges, so follow-up questions make sense.
+  `/forget` wipes your history
 - Local model through Ollama, or any OpenAI compatible chat endpoint
-- One sentence ASCII answers with exact-name Unicode mentions, capped at 150
-  characters including the mention and checked against the radio's byte limit
-- Prompt injection gate at four points: each channel line, the prompt, the
-  assembled context, and the reply
-- Loop guard, prompt length cap, hard model timeout with a fixed apology
-- A daily fortune, silly and unprompted, a little after six every morning,
-  in whatever voice is active
 - Named personalities, switched from the channel: `/funny`, `/snarky`,
-  `/marvin`, `/pirate`, `/haiku`, with `/help` and `/reset`; a switch reverts
-  to the default after two hours and the bot says so. The presets live in
-  `config.toml` and you can write your own
-- One dial for courtesy: `tx_duty_budget`, the share of channel time the
-  bot targets for its own transmissions, monitored from the radio's own
-  airtime counters and reported in the log, not a hard ceiling
-- Dynamically reduces its own traffic when the network is congested: it reads
-  the radio's airtime counters, halves its reply rate when the channel gets
-  busy, and stops replying until the channel clears
-- Token bucket rate limits, global and per sender name, as a burst floor
-- Up to ten waiting questions or command replies, plus one active answer;
-  waiting work expires after ten minutes, without extra radio announcements
-- Bounded in memory history rendered to the model as untrusted background,
-  never as prior chat turns
-- Per-person memory of recent exchanges, so follow-up questions make sense;
-  bounded per person, by age, and by population, with `/forget` to wipe it
+  `/marvin`, `/pirate`, `/haiku`, with `/help` and `/reset`. A switch reverts
+  after two hours. Presets live in `config.toml`; write your own
+- A daily fortune, silly and unprompted, a little after six every morning
+- Prompt injection gate on every channel line, the prompt, the assembled
+  context, and the reply
+- Polite on the air: a target share of channel time for its own
+  transmissions, measured from the radio's airtime counters, and automatic
+  slowdown when the channel is busy
+
+## Also
+
+- One sentence ASCII answers, capped at 150 characters including the
+  mention and checked against the radio's byte limit; sender names are
+  mentioned exactly as sent
+- Loop guard, prompt length cap, hard model timeout with a fixed apology
+- Rate limits, global and per sender, as a burst floor; up to ten waiting
+  questions and one active answer, with waiting work expiring after ten
+  minutes
+- Recent channel history given to the model as untrusted background, never
+  as prior chat turns
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
-- Clean shutdown on SIGINT and SIGTERM
-- Announces its name and software version once each time the bot starts
+- Announces its name and version once at startup; clean shutdown on SIGINT
+  and SIGTERM
 - Tests that need no radio, no model, and no network
 
 ## Quick start

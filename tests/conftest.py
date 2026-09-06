@@ -66,6 +66,8 @@ class FakeMeshCore:
         self.disconnected = False
         self.is_connected = True
         self.decrypt_channel_logs = False
+        self.self_info = {"name": "MeshAI", "tx_power": 22, "max_tx_power": 22, "radio_freq": 910.525,
+                          "radio_bw": 62.5, "radio_sf": 7, "radio_cr": 5}
 
     def subscribe(self, event_type, callback, attribute_filters=None):
         sub = (event_type, callback, attribute_filters)

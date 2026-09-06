@@ -50,6 +50,8 @@ class Config:
     too_long_reply: str = "That answer will not fit in one message, ask me something narrower."
     apology: str = "Sorry, I couldn't answer that one."
 
+    facts: str = ""  # local facts for the model, appended to the built-in LoRa facts and the radio's settings
+
     # [personas] table: name -> persona text (built-ins when absent), plus the keys below
     personas: dict[str, str] = field(default_factory=lambda: dict(BUILTIN_PERSONAS))
     default_persona: str = "funny"

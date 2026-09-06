@@ -41,6 +41,20 @@ def test_next_fire_rolls_to_tomorrow_once_today_is_past():
     assert at(2026, 9, 5, 6, 0) <= slot <= at(2026, 9, 5, 6, 12)
 
 
+def test_a_day_that_has_fired_is_never_offered_again():
+    """Regression: after posting at 06:01 a re-rolled offset of 06:03 must not fire again today."""
+    rng = random.Random(0)
+    for _ in range(200):  # any jitter draw
+        slot = next_fire(at(2026, 9, 6, 6, 1, 30), "06:00", 12, rng)
+        assert slot.day == 7 and at(2026, 9, 7, 6, 0) <= slot <= at(2026, 9, 7, 6, 12)
+
+
+def test_a_restart_after_the_base_time_waits_for_tomorrow():
+    rng = random.Random(0)
+    assert next_fire(at(2026, 9, 6, 6, 0, 1), "06:00", 12, rng).day == 7
+    assert next_fire(at(2026, 9, 6, 6, 0, 0), "06:00", 12, rng).day == 6  # exactly on time still counts
+
+
 def test_next_fire_with_zero_jitter_is_exact_and_crosses_midnight():
     rng = random.Random(1)
     assert next_fire(at(2026, 9, 4, 23, 59), "00:05", 0, rng) == at(2026, 9, 5, 0, 5)

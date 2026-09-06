@@ -8,7 +8,7 @@ in the active voice on a random subject and posted through the same path as a
 reply: plain ASCII, the injection check, the length cap with word-budget retries,
 a global limiter token. If the channel is paused or the model fails, it retries
 every couple of minutes until a cutoff after the scheduled time, then skips the
-day. There is no catch-up after a restart.
+day. A bot started after the base time does not post that day.
 """
 
 from __future__ import annotations
@@ -49,13 +49,19 @@ def format_date(when: datetime) -> str:
 
 
 def next_fire(now: datetime, hhmm: str, jitter_min: float, rng: random.Random) -> datetime:
-    """The next slot at or after ``now``: today's if still ahead, else tomorrow's, with fresh jitter."""
+    """The next slot: today's if today's base time has not yet passed, else tomorrow's.
+
+    Eligibility is decided on the base time, not the jittered slot. Deciding on the
+    jittered slot re-rolled the offset against a day that had already fired and posted
+    again whenever the new offset landed later than the old one. The same rule means a
+    bot started after the base time waits for tomorrow instead of risking a second post.
+    """
     hour, minute = parse_hhmm(hhmm)
     for day in (0, 1, 2):
         base = (now + timedelta(days=day)).replace(hour=hour, minute=minute, second=0, microsecond=0)
-        slot = base + timedelta(seconds=rng.uniform(0.0, max(0.0, jitter_min) * 60.0))
-        if slot > now:
-            return slot
+        if base < now:
+            continue
+        return base + timedelta(seconds=rng.uniform(0.0, max(0.0, jitter_min) * 60.0))
     raise RuntimeError("unreachable")
 
 

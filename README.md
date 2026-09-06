@@ -26,7 +26,7 @@ queue, so a delayed answer can mean congestion rather than a fault.
 What people on the channel see, in the MeshCore app on your phone:
 
 <p align="center">
-  <img src="docs/phone.png" width="260" alt="The #ai channel in the MeshCore app, with two replies from MeshAI">
+  <img src="docs/phone.png" width="340" alt="The #ai channel in the MeshCore app: two people talking and MeshAI answering each of them, its replies highlighted">
 </p>
 
 What you see, in the terminal monitor: radio and channel state, rate limits,
@@ -36,12 +36,13 @@ channel utilisation, and every message with the bot's decision on it:
 
 ## Features
 
-## Features
-
 - Answers every message on one MeshCore channel. On a shared channel, an
   optional trigger prefix such as `!ai` limits it to messages meant for it
 - Per-person memory of recent exchanges, so follow-up questions make sense.
   `/forget` wipes your history
+- Talks LoRa, not information theory. It knows the mesh's settings and what
+  each one trades off, reads its own frequency, bandwidth, and power from the
+  radio at startup, and gives practical answers about radio settings
 - Local model through Ollama, or any OpenAI compatible chat endpoint
 - Named personalities, switched from the channel: `/funny`, `/snarky`,
   `/marvin`, `/pirate`, `/haiku`, with `/help` and `/reset`. A switch reverts

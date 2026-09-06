@@ -28,8 +28,9 @@ from bot.config import Config
 from bot.guard import InjectionGate
 from bot.history import History, HistoryEntry, render_transcript
 from bot.jsonlog import EventLog
+from bot.memory import PersonMemory, render_rounds
 from bot.parse import extract_prompt, parse_channel_text
-from bot.personas import LORA_FACTS, RESET_COMMAND, parse_command, radio_facts
+from bot.personas import FORGET_COMMAND, LORA_FACTS, RESET_COMMAND, parse_command, radio_facts
 from bot.prompt import build_messages
 from bot.ratelimit import RateLimiter
 from bot.reply import compose_reply, shape_reply
@@ -40,6 +41,7 @@ class Decision(str, Enum):
     ANSWERED_FALLBACK = "answered:too-long-fallback"
     ANSWERED_HELP = "answered:help"
     ANSWERED_RESET = "answered:reset"
+    ANSWERED_FORGET = "answered:forget"
     PERSONA_SWITCHED = "persona-switched"
     APOLOGY = "apology"
     DROP_LOOP_GUARD = "dropped:loop-guard"
@@ -75,6 +77,8 @@ class Stats:
     persona_switches: int = 0
     posts_sent: int = 0  # unsolicited posts: fortunes, reset notices
     rx_heard: int = 0  # packets the radio reported hearing on the served channel
+    people_remembered: int = 0
+    rounds_remembered: int = 0
     last_latency_ms: float | None = None
     last_decision: str = ""
     started_at: float = field(default_factory=time.time)
@@ -109,6 +113,12 @@ class BotService:
         self._stopped = False
         self._last_sent: str | None = None
         self.active_persona = cfg.default_persona
+        self.memory = PersonMemory(
+            rounds=cfg.person_memory_rounds,
+            max_age_s=cfg.person_memory_days * 86400.0,
+            max_people=cfg.person_memory_people,
+            clock=clock,
+        )
         self.facts = self._compose_facts({})
         self._channel_hash: str | None = None
         self._persona_deadline: float | None = None  # monotonic clock value
@@ -313,7 +323,8 @@ class BotService:
 
         # Context. The triggering line is already the newest history entry; exclude it.
         transcript = self._transcript_excluding_latest()
-        context_verdict = self.gate.check(f"{transcript}\n{prompt}" if transcript else prompt)
+        memory_block = render_rounds(self.memory.rounds_for(parsed.sender), cfg.person_memory_max_chars)
+        context_verdict = self.gate.check("\n".join(part for part in (transcript, memory_block, prompt) if part))
         if context_verdict.blocked:
             self.stats.injection_blocks += 1
             return self._record(
@@ -331,7 +342,7 @@ class BotService:
         # the real room; the hard cap in compose_reply still enforces the true limit.
         budget = max(1, int((cfg.reply_max_chars - prefix_len) * 0.8))
         messages = build_messages(
-            cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona], self.facts
+            cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona], self.facts, memory_block
         )
 
         # Model, under a hard timeout per call. A reply that does not fit goes back to the
@@ -376,6 +387,9 @@ class BotService:
         decision = Decision.ANSWERED_FALLBACK if fallback else Decision.ANSWERED
         if await self._send(reply):
             self.stats.replies_sent += 1
+            if not fallback:
+                self.memory.record(parsed.sender, prompt, shaped)
+                self._update_memory_stats()
             return self._record(
                 parsed, path_len, decision, reply=reply, latency_ms=latency_ms, held_ms=held_ms, retries=retries
             )
@@ -387,6 +401,12 @@ class BotService:
         entries = self.history.entries()[:-1]
         lines = [e.line() for e in entries if not e.flagged]
         return render_transcript(lines, self.cfg.transcript_max_chars)
+
+    # ------------------------------------------------------------------ memory
+
+    def _update_memory_stats(self) -> None:
+        self.stats.people_remembered = self.memory.people
+        self.stats.rounds_remembered = self.memory.total_rounds
 
     # ------------------------------------------------------------------ facts
 
@@ -487,6 +507,12 @@ class BotService:
             self._switch_persona(cfg.default_persona)
             text = cfg.persona_reset_message
             decision = Decision.ANSWERED_RESET
+        elif command == FORGET_COMMAND:
+            had = self.memory.forget(parsed.sender)
+            self._update_memory_stats()
+            self.log.emit("memory_forget", sender=parsed.sender, had=had)
+            text = "Forgotten." if had else "I had nothing on you."
+            decision = Decision.ANSWERED_FORGET
         else:
             text = cfg.help_message  # help, or anything unrecognised
             decision = Decision.ANSWERED_HELP

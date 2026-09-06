@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from bot.fortune import parse_hhmm
-from bot.personas import BUILTIN_PERSONAS, HELP_COMMAND, NAME_RE, RESET_COMMAND, build_help
+from bot.personas import BUILTIN_PERSONAS, FORGET_COMMAND, HELP_COMMAND, NAME_RE, RESET_COMMAND, build_help
 
 ENV_PREFIX = "MESHAI_"
 API_KEY_ENV = "MESHAI_OPENAI_API_KEY"
@@ -91,6 +91,10 @@ class Config:
     # [history]
     history_size: int = 20
     transcript_max_chars: int = 1500
+    person_memory_rounds: int = 20  # answered exchanges remembered per sender name
+    person_memory_days: float = 7.0  # rounds older than this are dropped
+    person_memory_people: int = 500  # names remembered at once, least recently seen out first
+    person_memory_max_chars: int = 600  # size of the remembered block given to the model
 
     # [adaptive]
     adaptive_enabled: bool = True
@@ -161,7 +165,7 @@ class Config:
         for name, text in self.personas.items():
             if not NAME_RE.match(name):
                 errors.append(f"persona name {name!r} must be lowercase letters, digits, underscores, at most 16 chars")
-            if name in (HELP_COMMAND, RESET_COMMAND):
+            if name in (HELP_COMMAND, RESET_COMMAND, FORGET_COMMAND):
                 errors.append(f"persona name {name!r} collides with a command")
             if not isinstance(text, str) or not text.strip():
                 errors.append(f"persona {name!r} must have non-empty text")
@@ -183,7 +187,9 @@ class Config:
         for name in ("global_rate_per_min", "sender_rate_per_min"):
             if getattr(self, name) <= 0:
                 errors.append(f"{name} must be positive")
-        for name in ("global_burst", "sender_burst", "history_size"):
+        if self.person_memory_days <= 0 or self.person_memory_max_chars < 0:
+            errors.append("person_memory_days must be positive and person_memory_max_chars not negative")
+        for name in ("global_burst", "sender_burst", "history_size", "person_memory_rounds", "person_memory_people"):
             if getattr(self, name) < 1:
                 errors.append(f"{name} must be at least 1")
         if self.transcript_max_chars < 0:

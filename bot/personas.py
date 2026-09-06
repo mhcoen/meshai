@@ -42,6 +42,7 @@ def radio_facts(info: dict) -> str:
     return ("This radio is set to " + ", ".join(parts) + ".") if parts else ""
 HELP_COMMAND = "help"
 RESET_COMMAND = "reset"
+FORGET_COMMAND = "forget"
 
 # Lessons baked into every preset: lead with the joke and fold the answer in, aim it at
 # the question, the tech, the weather, the mesh, or the bot itself, never at the person;
@@ -98,4 +99,7 @@ def build_help(names: list[str], timeout_min: float, prefix: str) -> str:
     """The one-line help message: every persona command, reset, and the timeout."""
     minutes = int(timeout_min) if float(timeout_min).is_integer() else timeout_min
     listed = " ".join(f"{prefix}{n}" for n in names)
-    return f"{listed} change my personality for {minutes} min, {prefix}{RESET_COMMAND} restores it."
+    return (
+        f"{listed} switch my voice for {minutes} min, {prefix}{RESET_COMMAND} restores it, "
+        f"{prefix}{FORGET_COMMAND} wipes my memory of you."
+    )

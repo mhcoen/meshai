@@ -3,12 +3,13 @@
 Sender names are attacker-controlled, so the per-sender limit only protects against
 a *polite* flood; anyone can rotate names. The global bucket is the real ceiling.
 The global bucket's refill rate can be scaled at runtime (by the channel-utilization
-monitor); a factor of 0 pauses refill entirely.
+monitor); a factor of 0 rejects admission, including previously accumulated tokens.
 """
 
 from __future__ import annotations
 
 import time
+import math
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 
 class TokenBucket:
     def __init__(self, rate_per_sec: float, capacity: int, clock: Callable[[], float] = time.monotonic):
-        if rate_per_sec <= 0 or capacity < 1:
+        if not math.isfinite(rate_per_sec) or rate_per_sec <= 0 or capacity < 1:
             raise ValueError("rate_per_sec must be positive and capacity at least 1")
         self.rate = float(rate_per_sec)
         self.capacity = int(capacity)
@@ -32,7 +33,7 @@ class TokenBucket:
 
     def set_rate(self, rate_per_sec: float) -> None:
         """Change the refill rate from now on. Zero pauses refill; tokens already held remain."""
-        if rate_per_sec < 0:
+        if not math.isfinite(rate_per_sec) or rate_per_sec < 0:
             raise ValueError("rate_per_sec must not be negative")
         self._refill()
         self.rate = float(rate_per_sec)
@@ -54,6 +55,27 @@ class TokenBucket:
 class LimitDecision:
     allowed: bool
     reason: str  # "" | "global" | "sender"
+
+
+@dataclass
+class Reservation:
+    allowed: bool
+    reason: str
+    buckets: tuple[TokenBucket, ...] = ()
+
+    def commit(self) -> None:
+        # Start the next refill interval at transmission, not model admission.
+        # The reserved token stays unavailable even when generation was slow.
+        for bucket in self.buckets:
+            bucket._refill()
+            bucket._tokens = min(bucket.capacity - 1, bucket._tokens)
+        self.buckets = ()
+
+    def refund(self) -> None:
+        for bucket in self.buckets:
+            bucket._refill()
+            bucket._tokens = min(bucket.capacity, bucket._tokens + 1)
+        self.buckets = ()
 
 
 class RateLimiter:
@@ -91,13 +113,18 @@ class RateLimiter:
     def allow(self, sender: str) -> LimitDecision:
         """Consume one token from both buckets if both have one; otherwise consume nothing."""
         bucket = self._bucket_for(sender)
-        if self._global.peek() < 1.0:
+        if self._global_factor == 0 or self._global.peek() < 1.0:
             return LimitDecision(False, "global")
         if bucket.peek() < 1.0:
             return LimitDecision(False, "sender")
         self._global.try_acquire()
         bucket.try_acquire()
         return LimitDecision(True, "")
+
+    def reserve(self, sender: str) -> Reservation:
+        decision = self.allow(sender)
+        buckets = (self._global, self._senders[sender]) if decision.allowed else ()
+        return Reservation(decision.allowed, decision.reason, buckets)
 
     @property
     def global_factor(self) -> float:

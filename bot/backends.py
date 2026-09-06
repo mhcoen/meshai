@@ -5,16 +5,23 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from typing import Protocol
+from dataclasses import dataclass
 
 import httpx
 
 from bot.config import API_KEY_ENV, Config
 
 
+@dataclass(frozen=True)
+class Completion:
+    text: str
+    truncated: bool = False
+
+
 class Backend(Protocol):
     name: str
 
-    async def complete(self, messages: list[dict[str, str]]) -> str: ...
+    async def complete(self, messages: list[dict[str, str]]) -> str | Completion: ...
 
     async def aclose(self) -> None: ...
 
@@ -39,7 +46,7 @@ class OllamaBackend:
         self._think = {"off": False, "on": True}.get(think)  # "omit" -> None
         self._keep_alive = keep_alive
 
-    async def complete(self, messages: list[dict[str, str]]) -> str:
+    async def complete(self, messages: list[dict[str, str]]) -> Completion:
         kwargs: dict = {
             "model": self.model,
             "messages": messages,
@@ -49,7 +56,7 @@ class OllamaBackend:
         if self._think is not None:
             kwargs["think"] = self._think
         response = await self._client.chat(**kwargs)
-        return response.message.content or ""
+        return Completion(response.message.content or "", getattr(response, "done_reason", None) == "length")
 
     async def aclose(self) -> None:
         client = getattr(self._client, "_client", None)
@@ -77,7 +84,7 @@ class OpenAICompatBackend:
         self._temperature = temperature
         self._max_tokens = max_tokens
 
-    async def complete(self, messages: list[dict[str, str]]) -> str:
+    async def complete(self, messages: list[dict[str, str]]) -> Completion:
         payload = {
             "model": self.model,
             "messages": messages,
@@ -88,7 +95,8 @@ class OpenAICompatBackend:
         response = await self._client.post("/chat/completions", json=payload)
         response.raise_for_status()
         data = response.json()
-        return data["choices"][0]["message"]["content"] or ""
+        choice = data["choices"][0]
+        return Completion(choice["message"]["content"] or "", choice.get("finish_reason") == "length")
 
     async def aclose(self) -> None:
         await self._client.aclose()

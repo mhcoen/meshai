@@ -63,21 +63,17 @@ def test_compose_reply_prefixes_and_fits_cap():
 def test_compose_reply_never_exceeds_cap_and_never_cuts_prefix():
     body = "word " * 100
     out = compose_reply("Alice", body, 120)
-    assert out is not None
-    assert len(out) <= 120
-    assert out.startswith("@[Alice] ")
-    assert not out.endswith(" ")
+    assert out is None  # caller must shorten or select a complete fixed line
 
 
-def test_compose_reply_cuts_at_word_boundary_when_reasonable():
+def test_compose_reply_does_not_cut_at_word_boundaries():
     out = compose_reply("Al", "alpha beta gamma delta", 16)  # prefix "@[Al] " is 6 chars, 10 left
-    assert out == "@[Al] alpha beta"[:16]
-    assert len(out) <= 16
+    assert out is None
 
 
-def test_compose_reply_hard_cuts_when_no_space_in_second_half():
+def test_compose_reply_does_not_hard_cut_words():
     out = compose_reply("Al", "abcdefghijklmnopqrstuvwxyz", 16)
-    assert out == "@[Al] abcdefghij"
+    assert out is None
 
 
 def test_compose_reply_returns_none_when_sender_eats_the_budget():

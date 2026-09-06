@@ -144,7 +144,9 @@ class FakeBackend:
 
 
 def make_config(**overrides: Any) -> Config:
-    values: dict[str, Any] = {"port": "/dev/fake", "reply_delay_s": 0.0}
+    # Legacy unit tests exercise immediate rate-limit decisions with a frozen
+    # clock. Queue behavior/defaults are exercised explicitly in test_queue.py.
+    values: dict[str, Any] = {"port": "/dev/fake", "reply_delay_s": 0.0, "queue_max_pending": 0}
     values.update(overrides)
     return config_from_mapping(values, env={})
 

@@ -31,7 +31,7 @@ def test_old_rounds_expire(clock):
     assert [r.prompt for r in m.rounds_for("alice")] == ["newer"]
     clock.advance(100)
     assert m.rounds_for("alice") == []
-    assert m.sweep() == 1  # alice had nothing left and was removed
+    assert m.sweep() == 0  # rounds_for already removed the expired population entry
     assert m.people == 0
 
 

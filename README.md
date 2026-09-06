@@ -248,6 +248,23 @@ Do this once.
    anyone who adds `#ai` in their MeshCore app lands on the same channel. The
    bot refuses to start if the configured channel index is empty on the radio.
 
+   The parameters the script sets, and what they mean:
+
+   | Parameter | Set by | Meaning |
+   |---|---|---|
+   | node name | `set_name` | The name other nodes see, and the `Sender:` prefix on every channel message the radio sends. Must equal `bot_name`. |
+   | transmit power | `set_tx_power`, dBm | 22 is the SX1262 maximum; the script uses whatever the radio reports as its maximum. Lower it if the radio is on a marginal USB supply. |
+   | frequency | `set_radio`, MHz | Must match the mesh. USA/Canada recommended: 910.525. EU: see the MeshCore FAQ for the current preset. |
+   | bandwidth | `set_radio`, kHz | 62.5 hears weaker signals than 125 or 250 at the cost of airtime; the USA/Canada preset uses 62.5. |
+   | spreading factor | `set_radio`, 7 to 12 | Higher is longer range, lower data rate, and roughly double the airtime per step; the USA/Canada preset uses 7. |
+   | coding rate | `set_radio`, 5 to 8 | The denominator of 4/5 to 4/8. 4/5 has the least error correction and the most throughput; 4/8 the reverse. The USA/Canada preset uses 5. |
+   | channel | `set_channel`, slot 0 to 7 | Slot 0 is Public. A name starting with `#` derives its key from the name so others can join by name; any other name needs a shared 16 byte secret. |
+
+   Every one of these except the channel is a mesh-wide agreement, not a
+   preference: radios on different settings cannot hear each other. The
+   bot reads the radio's settings at startup and tells the model, so it can
+   answer "what frequency are you on" correctly.
+
 4. Add the same channel on the phone or radio you will test from.
 
 ## Configuration
@@ -518,7 +535,8 @@ textbook meaning and the mesh meaning differ) and the radio's own settings
 read from the companion at startup, so the bot knows its frequency,
 bandwidth, spreading factor, coding rate, and power. Add local facts with
 the `facts` key: where the mesh is, what the repeaters are called, anything
-people are likely to ask.
+people are likely to ask. The example config carries the facts for the
+Madison mesh; replace them with yours.
 
 `temperature` matters too: 0.3 gives flat and reliable, 0.6 (the default)
 gives a persona room, above 0.8 gets loose. Restart the bot after changing

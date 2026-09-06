@@ -16,10 +16,10 @@ history on disk.
 
 A live instance runs as MeshAI on the `#ai` channel of the MeshCore mesh in
 southern Wisconsin, centered on Madison. If you are on that mesh, add `#ai`
-in your MeshCore app and say something. It keeps its own transmissions to
-about 2 percent of the channel's time, never answers closer than 15 seconds
-apart, and backs off when the channel is busy, so a silence usually means
-the limit rather than a fault.
+in your MeshCore app and say something. It targets about 2 percent of the
+channel's time for its own transmissions, never answers closer than 15 seconds
+apart, and backs off when the channel is busy. Questions wait in a bounded
+queue, so a delayed answer can mean congestion rather than a fault.
 
 ## Screenshots
 
@@ -39,8 +39,8 @@ channel utilisation, and every message with the bot's decision on it:
 - Answers every message on one MeshCore channel. On a shared channel, an
   optional trigger prefix such as `!ai` limits it to messages meant for it
 - Local model through Ollama, or any OpenAI compatible chat endpoint
-- One sentence replies, plain ASCII, one byte per character on the air, capped
-  at 150 characters, which is all the radio will carry
+- One sentence ASCII answers with exact-name Unicode mentions, capped at 150
+  characters including the mention and checked against the radio's byte limit
 - Prompt injection gate at four points: each channel line, the prompt, the
   assembled context, and the reply
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
@@ -51,12 +51,14 @@ channel utilisation, and every message with the bot's decision on it:
   to the default after two hours and the bot says so. The presets live in
   `config.toml` and you can write your own
 - One dial for courtesy: `tx_duty_budget`, the share of channel time the
-  bot may use for its own transmissions, enforced from the radio's own
-  airtime counters and reported in the log
+  bot targets for its own transmissions, monitored from the radio's own
+  airtime counters and reported in the log, not a hard ceiling
 - Dynamically reduces its own traffic when the network is congested: it reads
   the radio's airtime counters, halves its reply rate when the channel gets
   busy, and stops replying until the channel clears
 - Token bucket rate limits, global and per sender name, as a burst floor
+- Up to ten waiting questions or command replies, plus one active answer;
+  waiting work expires after ten minutes, without extra radio announcements
 - Bounded in memory history rendered to the model as untrusted background,
   never as prior chat turns
 - Per-person memory of recent exchanges, so follow-up questions make sense;
@@ -64,7 +66,8 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 233 tests that need no radio, no model, and no network
+- Announces its name and software version once each time the bot starts
+- Tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -262,10 +265,12 @@ Do this once.
    | coding rate | `set_radio`, 5 to 8 | The denominator of 4/5 to 4/8. 4/5 has the least error correction and the most throughput; 4/8 the reverse. The USA/Canada preset uses 5. |
    | channel | `set_channel`, slot 0 to 7 | Slot 0 is Public. A name starting with `#` derives its key from the name so others can join by name; any other name needs a shared 16 byte secret. |
 
-   Every one of these except the channel is a mesh-wide agreement, not a
-   preference: radios on different settings cannot hear each other. The
-   bot reads the radio's settings at startup and tells the model, so it can
-   answer "what frequency are you on" correctly.
+   Match the local mesh's frequency, bandwidth, and spreading factor, and
+   start with its recommended coding rate. Node names and transmit power
+   need not match other nodes. The script selects maximum reported power;
+   a lower setting may suffice if links remain reliable. The bot reads,
+   but does not change, the radio's settings at startup and tells the model,
+   so it can answer "what frequency are you on" correctly.
 
 4. Add the same channel on the phone or radio you will test from.
 
@@ -284,7 +289,7 @@ Three settings must match your setup:
 | `bot_name` | the node name (MeshAI in the script) |
 
 Everything else has a working default; the full list is in the
-[configuration reference](#configuration-reference). Every key can also be
+[configuration reference](docs/configuration.md). Every key can also be
 set as an environment variable named `MESHAI_` plus the key in upper case,
 for example `MESHAI_PORT=/dev/ttyUSB0`, and the environment wins over the
 file. `config.toml` is ignored by git.
@@ -313,6 +318,13 @@ what the radio heard that the bot never received (see
 [Troubleshooting](#troubleshooting)). `--debug` adds the meshcore library's frame
 level log to `<log file>.debug`. Stop it with Ctrl-C or SIGTERM; the bot
 unsubscribes, stops message fetching, and closes the port.
+
+After a successful start, the bot announces its name and package version, for
+example `MeshAI v1.2.0 online.` (also available locally with `meshai --version`).
+This uses the normal ASCII/length checks, injection gate, and rate limits, with
+the initial reply delay. It defers behind queued replies and congestion for up
+to ten minutes, then skips the announcement if still blocked. It does not use
+the model or repeat on reconnect; a failed send is logged, not retried.
 
 Then send a message on the channel from your phone. The bot answers every
 message on the channel by default. To make it answer only messages that
@@ -352,48 +364,81 @@ part is whatever the sending node put there; nothing verifies it.
    exchanges, and the prompt together, so fragments that pass one at a time
    but add up to an instruction are caught here. This runs before any rate-limit token is
    spent, so a message blocked here costs the bot nothing.
-8. **Rate limits.** A global token bucket and one per sender name. Tokens are
-   taken here, once, and whatever goes out for this message rides on them.
-   When a bucket is empty the message is dropped and logged.
+8. **Queue and rate limits.** One active answer and up to `queue_max_pending`
+   waiting questions or command replies, in arrival order. Waiting work spends
+   no tokens and expires after `queue_wait_s`, before model generation. A full
+   queue rejects new arrivals, preserving those already waiting. The head waits
+   for both global and per-sender tokens; congestion never speeds up draining.
+   Once admitted, memory is refreshed and context checked again; the transcript
+   remains the ingestion snapshot. Tokens are reserved, committed on a send
+   attempt, and refunded on injection blocks or other unsent outcomes. Refill
+   timing is anchored to transmission, so slow generation cannot bunch replies.
 9. **Model.** One call under a hard timeout of `model_timeout_s`. On a
    timeout or any error the fixed `apology` text is posted instead.
 10. **Shape.** Strip any leaked `<think>` block, collapse whitespace, reduce
     to plain ASCII with ordinary punctuation, keep the first sentence. If
     the first sentence is a question the next sentence is kept too, so a
     riddle keeps its punchline.
-11. **Injection check, reply.** If it is flagged nothing is sent, not even the
-    apology.
-12. **Fit.** If the shaped reply is longer than the room left after
-    `@[sender] `, it goes back to the model with its length and the exact
+11. **Injection check, reply.** Every generated candidate is checked before a
+    shortening retry or fallback decision. If flagged, nothing is sent, not even
+    the apology. The complete outgoing line, including the sender prefix, is
+    checked too; this also applies to fixed replies and announcements.
+12. **Fit.** The answer must fit both the character cap after `@[sender] ` and
+    the 160-byte radio limit after the UTF-8 encoded node name, `: `, and mention.
+    If it exceeds the smaller remaining budget, it goes back to the model with its length and the exact
     limit, up to `shorten_retries` times, the second time with a tighter
     target. If it still does not fit, the fixed `too_long_reply` line is sent
-    instead. Model output is never cut mid-sentence.
-13. **Send.** `@[sender] ` plus the text. A send failure is logged and not
-    retried. Only a sender name so long that nothing fits after the prefix
-    results in no message at all.
+    instead. A backend response stopped by its token limit also takes this
+    shortening path. Model output and fixed lines are never sliced to fit.
+13. **Send.** `@[sender] ` plus the ASCII answer, preserving the sender name
+    verbatim so the app can recognize the mention, including emoji or accents.
+    Unicode is allowed only in this mention; names containing control characters
+    or line breaks are rejected, not rewritten.
+    A send failure is logged and not retried. A utilization pause during generation
+    or the reply delay retains the active answer until sending is allowed, without
+    regenerating it; the waiting-work expiry no longer applies. Shutdown cancels
+    active and waiting work; the queue is memory-only and does not survive restart.
+    Names leaving insufficient room for fixed replies are rejected before queueing.
 
-Every inbound message produces one `inbound` record in the JSON log with
+The terminal shows queue depth, active-answer status, expirations, and full-queue
+drops. `queued`/`dequeued` log events track waiting; no queue acknowledgements are
+sent over the radio. `/forget` and persona changes still take effect immediately,
+even if their reply must wait. Fortunes and timer announcements defer behind the
+queue within their existing deadlines. Set `queue_max_pending = 0` for the old
+drop-when-busy behavior, including dropping an answer if transmission pauses.
+
+Configured outgoing lines and prefixes must already use printable ASCII with
+ordinary punctuation; invalid text is rejected at load time, not silently changed.
+The sender mention is the sole Unicode exception; the complete line still passes
+the injection gate and the UTF-8 byte check before transmission.
+
+Each delivered channel message produces a `received` record immediately, so
+waiting or cancelled work is not mistaken for a radio-delivery failure. Completed
+handling produces an `inbound` decision record with
 `sender`, `prompt`, `path_len`, `decision`, and the reason, or the injection
 score and matched rules, when it was dropped. Decisions: `answered`,
 `answered:too-long-fallback`, `answered:help`, `answered:reset`, `answered:forget`,
 `persona-switched`, `apology`, `dropped:loop-guard`, `dropped:no-trigger`, `dropped:too-long`,
-`dropped:injection-blocked`, `dropped:rate-limited`, `dropped:empty-reply`,
+`dropped:injection-blocked`, `dropped:rate-limited`, `dropped:queue-full`,
+`dropped:queue-expired`, `dropped:empty-reply`,
 `dropped:send-failed`.
 
 ## Rate limits and channel load
 
-There is one dial: `tx_duty_budget`, the fraction of the channel's time the
-bot may occupy with its own transmissions, 0.02 by default. The monitor reads
+There is one dial: `tx_duty_budget`, the target fraction of channel time for
+the bot's own transmissions, 0.02 by default. The monitor reads
 the radio's transmit airtime counter every `utilization_poll_s` seconds,
 works out the bot's own duty cycle over the last `utilization_window_s`, and
 steps the reply rate down when it reaches the budget: halved at the
 budget, paused at twice it, relaxed one step at a time once it drops well
-back. That makes "we use at most 2 percent of the channel" a
-statement the log can back up, and turning it down is one line in
-`config.toml`.
+back. This is feedback control, not a hard 2 percent ceiling: measurement and
+confirmation delays allow overshoot. It counts this radio's transmit airtime,
+not the additional transmissions caused by repeaters, and cannot measure traffic
+the radio cannot hear. Turning the target down is one line in `config.toml`.
 
-What the budget means in practice, with a full 150 character reply taking
-roughly 0.6 seconds of airtime on the USA preset:
+For illustration, if a reply occupies 0.6 seconds on air, these average paces
+would correspond to each target. Actual packet airtime varies; these are not
+guaranteed controller rates, and the global limit still applies:
 
 | `tx_duty_budget` | sustained pace | note |
 |---|---|---|
@@ -407,6 +452,9 @@ replies closer than 15 seconds) bounds bursts when the window is still quiet,
 and `sender_rate_per_min` does the same per sender name, which is easy to
 forge and therefore only a politeness measure. Shorter replies
 (`reply_max_chars`) buy more replies for the same budget.
+The default 15 seconds is minimum reply spacing, not a receive refresh interval:
+messages arrive as events. Utilization checks run over USB every 10 seconds,
+and the terminal refreshes every second; neither adds radio traffic.
 
 Timing matters as much as volume. For a few seconds after any channel
 message, every repeater in range rebroadcasts it, and a reply transmitted
@@ -442,62 +490,8 @@ does not register.
 
 ## Configuration reference
 
-All keys with their defaults. Sections in the file are for readability only;
-any key may appear in any section.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `port` | required | Serial device of the companion radio |
-| `channel_idx` | `1` | Channel slot on the radio to serve |
-| `bot_name` | `MeshAI` | Must equal the radio's node name |
-| `trigger_prefix` | `""` | Off by default, so every message is answered; `"!ai "` answers only messages beginning with that exact text |
-| `reply_max_chars` | `150` | Cap on the whole outbound message, prefix included; the radio carries 160 bytes minus the node name and 2 |
-| `prompt_max_chars` | `160` | Longer prompts are dropped |
-| `reply_delay_s` | `8.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](#rate-limits-and-channel-load) |
-| `shorten_retries` | `2` | Times a reply that does not fit goes back to the model with the exact limit |
-| `too_long_reply` | `That answer will not fit in one message, ask me something narrower.` | Sent when it still does not fit after the retries |
-| `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
-| `facts` | `""` | Local facts added to the system prompt after the built-in LoRa facts and the radio's own settings |
-| `[personas]` | five built-ins | Table of name = text presets; see [Personalities](#personalities) |
-| `default_persona` | `funny` | The preset active at start and after a reset |
-| `persona_timeout_min` | `120` | A switched personality reverts after this long |
-| `persona_reset_message` | `Back to the default personality.` | Posted when it reverts |
-| `command_prefix` | `/` | Commands are this prefix plus a preset name, `help`, or `reset` |
-| `backend` | `ollama` | `ollama` or `openai` |
-| `model` | `qwen3:30b-a3b-instruct-2507-q4_K_M` | Model name for the backend |
-| `ollama_host` | `http://127.0.0.1:11434` | Ollama server |
-| `ollama_think` | `off` | `off`, `on`, or `omit` for models that reject the option |
-| `ollama_keep_alive` | `30m` | How long Ollama keeps the model loaded between replies |
-| `openai_base_url` | `http://127.0.0.1:1234/v1` | OpenAI compatible server, when `backend = "openai"` |
-| `temperature` | `0.6` | Sampling temperature |
-| `max_tokens` | `80` | Output token limit |
-| `model_timeout_s` | `30.0` | Hard timeout on the model call |
-| `global_rate_per_min` | `4.0` | Burst floor: replies per minute across all senders |
-| `global_burst` | `1` | Global bucket size |
-| `sender_rate_per_min` | `4.0` | Replies per minute per sender name |
-| `sender_burst` | `1` | Per sender bucket size |
-| `fortune_enabled` | `true` | Post a daily fortune |
-| `fortune_time` | `06:00` | Local time; a random offset up to `fortune_jitter_min` is added each day |
-| `fortune_jitter_min` | `12` | Random offset after `fortune_time` |
-| `fortune_cutoff_min` | `30` | Keep retrying a deferred fortune until this long after the slot, then skip the day |
-| `fortune_prefix` | `Fortune: ` | Lead-in on the post |
-| `fortune_prompt` | see example config | The request to the model; must contain `{subject}`, may use `{date}` |
-| `fortune_fallback` | `The mesh is quiet this morning, and so is your fortune.` | Posted if the fortune will not fit after the retries |
-| `adaptive_enabled` | `true` | Scale the global rate by channel load |
-| `utilization_poll_s` | `10.0` | Seconds between radio statistics polls |
-| `utilization_window_s` | `120.0` | Window for the duty cycle |
-| `duty_low` | `0.05` | Receive duty cycle at which the rate is halved |
-| `duty_high` | `0.15` | Receive duty cycle at which replies pause |
-| `tx_duty_budget` | `0.02` | The dial: share of channel time for the bot's own transmissions |
-| `history_size` | `20` | Channel lines kept in memory |
-| `transcript_max_chars` | `1500` | Size of the transcript given to the model |
-| `person_memory_rounds` | `20` | Answered exchanges remembered per sender name |
-| `person_memory_days` | `14` | Rounds older than this are dropped |
-| `person_memory_people` | `500` | Names remembered at once, least recently seen out first |
-| `person_memory_max_chars` | `600` | Size of the remembered block given to the model |
-| `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |
-| `rx_log` | `channel` | Log packets the radio hears: `off`, `channel` (the served channel), or `all` |
-| `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshai.jsonl` (monitor) |
+See the [full configuration reference](docs/configuration.md) for every key,
+default, and meaning. Common behavior is described below.
 
 ### Personalities
 
@@ -564,9 +558,10 @@ Garbage collection has three parts, each a config key: rounds beyond the
 per-person cap fall off the old end; rounds older than `person_memory_days`
 (14) are dropped; and no more than `person_memory_people` (500) names are
 held at once, least recently seen out first, which is also what stops a
-name-rotating flood from filling it. `/forget` wipes the bot's memory of
-the sender that sent it. Everything is in memory only and a restart clears
-it.
+name-rotating flood from filling it. Expired entries are swept on access and
+at least once a minute while the bot is running. `/forget` wipes the bot's
+memory of the sender and prevents older in-flight requests from repopulating
+it. Everything is in memory only and a restart clears it.
 
 Sender names are not authenticated, so this is continuity for a
 conversation, not identity: anyone can claim a name and inherit its
@@ -595,8 +590,13 @@ retries every two minutes until `fortune_cutoff_min` after the slot, then
 skips the day and logs `fortune_skipped`. A day is only offered while its
 base time has not passed, so once today's fortune has gone out the next is
 tomorrow's, and a bot started after `fortune_time` waits for tomorrow rather
-than posting a breakfast fortune at noon or a second one after a restart. The
-monitor shows the next slot and the counts.
+than posting a breakfast fortune at noon or a second one after a restart.
+Jitter and the retry cutoff are capped before midnight. A send failure ends
+the day's attempt because a missing acknowledgement may hide a successful
+transmission. The scheduler remembers consumed days while running and skips
+today after a restart in the repeated autumn DST hour. Without persistent
+state, arbitrary clock rollback across a restart cannot be deduplicated.
+The monitor shows the next slot and the counts.
 
 ## Security
 
@@ -638,38 +638,8 @@ The API key for an OpenAI compatible backend comes only from the
 
 ## Troubleshooting
 
-**"cannot open /dev/...: No such file or directory".** Either the `port`
-setting does not match this computer, or the radio has not enumerated. The
-message lists the serial ports it can see. If the radio is among them under
-another name, set `port` in `config.toml`; port names differ between
-machines even for the same radio, and on Linux your user must be in the
-`dialout` group. If the radio is not listed at all, press its reset button,
-or unplug it and plug it back in. After a Mac reboot or a macOS update the
-Heltec Wireless Paper's USB bridge often does not come up until the radio
-itself is reset, and `ls /dev/cu.*` shows nothing for it until then.
-
-**The radio appears twice, as `cu.usbserial-XXXX` and `cu.SLAB_USBtoUART`.**
-Two drivers are attached to the one CP210x bridge: Apple's built-in
-`AppleUSBSLCOM` and the Silicon Labs VCP extension, which is redundant on any
-recent macOS and a source of flaky serial behaviour when both are present.
-`ioreg -l -w0 | grep -E 'IOUserServerName|IOTTYBaseName'` shows both
-attached to the same device. Remove the Silicon Labs one: delete its app
-(usually `CP210xVCPDriver` in `/Applications`), approve the removal of the
-extension, reboot, and reset the radio. The bot uses the Apple node.
-
-**"no response from a MeshCore companion" on a radio that was working.**
-Boards with a CP2102 USB bridge and the usual ESP32 auto program circuit (the
-Heltec Wireless Paper is one) can end up in the serial bootloader. pyserial
-asserts DTR when it opens the port and the meshcore library then clears RTS,
-which holds the chip's IO0 line low for as long as the port is open. The radio
-keeps running, but if it resets for any reason while the port is open, a
-brownout at full transmit power for instance, it comes back in the bootloader
-and stays silent until it is power cycled. The bot releases both lines right
-after opening the port, waits for a possible reboot, and retries the handshake
-without reopening, so this should not happen while it runs. If it does, unplug
-the radio, wait a few seconds, and plug it back in. To confirm the diagnosis,
-`esptool --port <port> --before no-reset chip-id` connects immediately when
-the chip is in the bootloader and fails when it is running MeshCore.
+For missing serial ports, duplicate macOS USB drivers, or a companion that
+stops responding, see [USB serial troubleshooting](docs/usb-troubleshooting.md).
 
 **Other people see my messages but only a few of the bot's.** The bot's
 replies are going out while repeaters are still rebroadcasting the question
@@ -680,21 +650,26 @@ with many repeaters or long hop counts raise it to 8 or 10. Shorter replies
 **The bot misses messages that my own node hears.** Three different things
 look like this, and the JSON log tells them apart.
 
-1. It was not missed, it was dropped. Look for an `inbound` record at that
-   time with `dropped:rate-limited` or `dropped:injection-blocked`. The bot
-   never answers two messages closer than the burst floor.
+1. It is waiting, or it was dropped. Check the terminal's queue counts and
+   `queued`/`dequeued` events, then the final `inbound` record for
+   `dropped:queue-full`, `dropped:queue-expired`, or `dropped:injection-blocked`
+   (`dropped:rate-limited` with queueing disabled). The queue never bypasses
+   minimum reply spacing or congestion pauses.
 2. The radio never heard it. With `rx_log = "channel"` (the default) the
    bot writes an `rx` record for every packet the radio hears on the served
    channel, decrypted, with RSSI, SNR, and hop count, whether or not a
-   message was delivered. No `rx` record and no `inbound` record means the
+   message was delivered. No `rx` record and no `received` record suggests the
    packet never reached the radio: range, placement, or the radio's own
    transmission at that moment, since it cannot hear while it sends. Compare
    RSSI and SNR on the messages it does hear with what your node reports.
 3. The radio heard it and the computer did not get it. An `rx` record with
-   the message text but no `inbound` record for it means the packet was
+   the message text but no `received` record for it suggests the packet was
    received and then lost between the radio and the bot: the companion's
    message queue, the serial link, or the USB port. That is the case to
    report, with the `--debug` frame log from the same minute.
+
+For older logs without `received` events, use `inbound` records instead;
+the log checker understands both formats.
 
 The comparison in case 3 is built in:
 
@@ -712,9 +687,10 @@ reported as losses.
 lot on a busy mesh, for looking at coverage generally.
 
 **The bot answered once and then went quiet.** Look at the JSON log. A
-`dropped:rate-limited` line means the second message came inside the limit; a
+`queued` line means a question is waiting for its turn or a token; a
 `rate_level` line means the channel load monitor stepped the rate down.
-Neither is a fault. If there are no `inbound` lines at all after the first
+Neither is a fault. With queueing disabled, `dropped:rate-limited` means the
+question arrived while busy or without a token. If there are no `received` lines after the first
 reply, the radio has most likely stopped pushing messages; see the previous
 item.
 

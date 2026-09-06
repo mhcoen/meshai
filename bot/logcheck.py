@@ -1,8 +1,8 @@
 """Read a JSON log and say what the radio heard but the bot never received.
 
 An `rx` record is written for every packet the radio hears on the served channel
-(when rx_log is on); an `inbound` record for every message the companion delivers.
-A heard message from someone else with no matching inbound record was lost between
+(when rx_log is on); a `received` record at ingestion and `inbound` for the final
+decision. Legacy logs contain only `inbound`. A heard message with neither was lost between
 the radio and the computer. The bot's own replies come back off the repeaters and
 are heard too, so they are excluded.
 """
@@ -24,7 +24,7 @@ class CheckResult:
     bot_name: str = ""
     heard: int = 0  # packets heard from others on the channel
     heard_own: int = 0  # the bot's own posts coming back off repeaters
-    delivered: int = 0  # inbound records
+    delivered: int = 0  # received messages, including waiting work; legacy inbound fallback
     decisions: Counter = field(default_factory=Counter)
     undelivered: list[tuple[str, str, int | None, float | None]] = field(default_factory=list)  # ts, text, rssi, snr
     rssi: list[int] = field(default_factory=list)
@@ -62,6 +62,7 @@ def check_log(path: str | Path) -> CheckResult:
     result = CheckResult()
     heard: list[tuple[str, str, int | None, float | None]] = []
     delivered: set[str] = set()
+    pending: Counter[str] = Counter()
     with Path(path).open(encoding="utf-8") as fh:
         for raw in fh:
             raw = raw.strip()
@@ -75,6 +76,7 @@ def check_log(path: str | Path) -> CheckResult:
             event = r.get("event")
             if event == "startup" and r.get("bot_name"):
                 result.bot_name = str(r["bot_name"])
+                pending.clear()  # cancelled work from a previous run cannot finish now
             elif event == "rx" and r.get("ours") and r.get("message"):
                 text = _norm(str(r["message"]))
                 if result.bot_name and text.startswith(result.bot_name + ":"):
@@ -86,9 +88,20 @@ def check_log(path: str | Path) -> CheckResult:
                     result.rssi.append(int(r["rssi"]))
                 if isinstance(r.get("snr"), (int, float)):
                     result.snr.append(float(r["snr"]))
-            elif event == "inbound":
+            elif event == "received":
+                text = _norm(f"{r.get('sender', '')}: {r.get('prompt', '')}")
                 result.delivered += 1
+                pending[text] += 1
+                delivered.add(text)
+            elif event == "inbound":
+                text = _norm(f"{r.get('sender', '')}: {r.get('prompt', '')}")
+                if pending[text]:
+                    pending[text] -= 1
+                    if not pending[text]:
+                        del pending[text]
+                else:
+                    result.delivered += 1
                 result.decisions[str(r.get("decision", "?"))] += 1
-                delivered.add(_norm(f"{r.get('sender', '')}: {r.get('prompt', '')}"))
+                delivered.add(text)
     result.undelivered = [h for h in heard if h[1] not in delivered]
     return result

@@ -153,8 +153,8 @@ async def test_fire_defers_while_rate_limited_and_posts_when_a_token_returns(har
 
 async def test_fire_skips_the_day_after_the_cutoff(harness):
     h = harness()
-    h.service.limiter.set_global_factor(0.0)
     await h.say("Alice: q")  # spend the token; paused, so it never returns
+    h.service.limiter.set_global_factor(0.0)
     wall = Clock(at(2026, 9, 4, 6, 3))
     s, records = make_scheduler(h, wall, cutoff_min=5, retry_s=60)
 

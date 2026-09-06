@@ -1,9 +1,10 @@
 """Shape the model's output into a single channel-safe line and enforce the cap.
 
-Everything that leaves the bot is plain ASCII with ordinary punctuation. Dashes become
+Answer text is plain ASCII with ordinary punctuation. Dashes become
 commas, ellipses become periods, curly quotes become straight ones, accented letters
 lose their accents, and anything else outside ASCII (emoji, symbols) is dropped. One
-byte per character on the air, and readable on any screen.
+byte per answer character on the air. Sender mentions preserve the original Unicode
+name; their UTF-8 byte cost is accounted for separately.
 """
 
 from __future__ import annotations
@@ -11,8 +12,9 @@ from __future__ import annotations
 import re
 import unicodedata
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
-_SENTENCE_RE = re.compile(r"(.+?[.!?])(?=\s|$)")
+_THINK_RE = re.compile(r"<think>.*?(?:</think>|$)", re.DOTALL | re.IGNORECASE)
+_SENTENCE_RE = re.compile(r'''[.!?]["']?(?=\s|$)''')
+_ABBREVIATION_RE = re.compile(r"(?:\b(?:dr|mr|mrs|ms|prof|sr|jr|st|vs|etc)|\b[a-z](?:\.[a-z])+)\.$", re.I)
 _QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("\u201c", "\u201d"), ("\u2018", "\u2019"))
 
 # Dashes used as separators read as commas; a hyphen inside a word stays a hyphen.
@@ -48,8 +50,10 @@ def plain_ascii(text: str) -> str:
     text = _ELLIPSIS_RE.sub(".", text)
     text = text.replace(";", ",")
     text = unicodedata.normalize("NFKD", text)
+    text = text.replace("\u2044", "/").replace("\u2212", "-")
     text = text.encode("ascii", "ignore").decode("ascii")
     text = collapse_whitespace(text)
+    text = "".join(c for c in text if " " <= c <= "~")
     text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
     text = _DOUBLE_COMMA_RE.sub(",", text)
     text = _COMMA_BEFORE_STOP_RE.sub(r"\1", text)
@@ -62,18 +66,15 @@ def first_sentence(text: str) -> str:
     A terminator followed by a non-space (3.5, e.g.) does not split. A question on its
     own is never a complete reply (riddle-style jokes), so its answer is kept too.
     """
-    match = _SENTENCE_RE.match(text)
-    if not match:
-        return text
-    first = match.group(1)
-    if first.endswith("?"):
-        rest = text[match.end():].lstrip()
-        follow = _SENTENCE_RE.match(rest)
-        if follow:
-            return f"{first} {follow.group(1)}"
-        if rest:
-            return f"{first} {rest}"
-    return first
+    keep_answer = False
+    for match in _SENTENCE_RE.finditer(text):
+        if match.group().startswith(".") and _ABBREVIATION_RE.search(text[:match.start() + 1]):
+            continue
+        if not keep_answer and match.group().startswith("?"):
+            keep_answer = True
+            continue
+        return text[:match.end()]
+    return text
 
 
 def shape_reply(raw: str) -> str:
@@ -83,27 +84,29 @@ def shape_reply(raw: str) -> str:
     return first_sentence(text).strip()
 
 
-def compose_reply(sender: str, text: str, max_chars: int) -> str | None:
-    """Return ``"@[sender] text"`` cut to ``max_chars`` total, or None if nothing fits.
+def reply_prefix(sender: str) -> str:
+    return f"@[{sender}] "
 
-    The prefix is never truncated. When the body must be cut, it is cut at the last
-    space if one exists in the second half of the available room, so we avoid ending
-    on a fragment; otherwise it is a hard cut.
-    """
-    prefix = f"@[{sender}] "
-    available = max_chars - len(prefix)
+
+def reply_body_room(sender: str, max_chars: int, max_bytes: int) -> int:
+    """Room for an ASCII body after an exact-name mention, under both caps."""
+    prefix = reply_prefix(sender)
+    # Preserve display names, including emoji joiners, but never emit line breaks,
+    # terminal controls, or invalid UTF-8. Reject rather than change the identity.
+    if any(unicodedata.category(c) in {"Cc", "Cs", "Zl", "Zp"} for c in prefix):
+        return 0
+    return min(max_chars - len(prefix), max_bytes - len(prefix.encode("utf-8")))
+
+
+def compose_reply(sender: str, text: str, max_chars: int, *, max_bytes: int = 160) -> str | None:
+    """Compose a complete reply, or return None; never slice a body or prefix."""
+    prefix = reply_prefix(sender)
+    available = reply_body_room(sender, max_chars, max_bytes)
     body = text.strip()
-    if available <= 0 or not body:
+    if available <= 0 or not body or len(body) > available:
         return None
-    if len(body) > available:
-        cut = body[:available]
-        if body[available] != " ":  # the cut landed inside a word
-            space = cut.rfind(" ")
-            if space >= available // 2:
-                cut = cut[:space]
-        body = cut.rstrip(" ,")
-        if not body:
-            return None
     reply = prefix + body
+    if len(reply.encode("utf-8")) > max_bytes:
+        return None
     assert len(reply) <= max_chars
     return reply

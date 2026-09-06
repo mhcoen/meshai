@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from bot.jsonlog import EventLog
@@ -59,9 +59,12 @@ def next_fire(now: datetime, hhmm: str, jitter_min: float, rng: random.Random) -
     hour, minute = parse_hhmm(hhmm)
     for day in (0, 1, 2):
         base = (now + timedelta(days=day)).replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if base < now:
+        if base < now or (day == 0 and now.fold):
             continue
-        return base + timedelta(seconds=rng.uniform(0.0, max(0.0, jitter_min) * 60.0))
+        midnight = (base + timedelta(days=1)).replace(hour=0, minute=0, fold=0)
+        room = (midnight - base).total_seconds() - 0.000001
+        offset = rng.uniform(0.0, min(min(max(0.0, jitter_min), 1440.0) * 60.0, room))
+        return base + timedelta(seconds=min(offset, room))
     raise RuntimeError("unreachable")
 
 
@@ -96,6 +99,7 @@ class FortuneScheduler:
         self.posted = 0
         self.skipped = 0
         self._task: asyncio.Task[None] | None = None
+        self._last_day: date | None = None
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -115,7 +119,10 @@ class FortuneScheduler:
     async def _run(self) -> None:
         while True:
             try:
-                self.next_at = next_fire(self._now(), self.hhmm, self.jitter_min, self._rng)
+                now = self._now()
+                if self._last_day is not None and now.date() <= self._last_day:
+                    now = datetime.combine(self._last_day + timedelta(days=1), datetime.min.time(), tzinfo=now.tzinfo)
+                self.next_at = next_fire(now, self.hhmm, self.jitter_min, self._rng)
                 self.log.emit("fortune_scheduled", at=self.next_at.isoformat(timespec="seconds"))
                 await self._sleep_until(self.next_at)
                 await self.fire(self.next_at)
@@ -136,23 +143,36 @@ class FortuneScheduler:
 
     async def fire(self, slot: datetime) -> bool:
         """Try to post until the cutoff; return True if a fortune went out."""
-        deadline = slot + timedelta(minutes=self.cutoff_min)
+        if self._last_day is not None and slot.date() <= self._last_day:
+            return False
+        self._last_day = slot.date()
+        midnight = (slot + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0, fold=0)
+        deadline = min(slot + timedelta(minutes=min(self.cutoff_min, 1440)), midnight - timedelta(microseconds=1))
+
+        def can_send() -> bool:
+            now = self._now()
+            return slot <= now <= deadline and now.date() == slot.date() and not now.fold
+
         attempts = 0
         while True:
+            if not can_send():
+                self.skipped += 1
+                self.log.emit("fortune_skipped", reason="expired", attempts=attempts)
+                return False
             attempts += 1
             subject = self._rng.choice(SUBJECTS)
             request = self.prompt.format(subject=subject, date=format_date(self._now()))
-            outcome = await self.service.post_generated(self.prefix, request, self.fallback, what="fortune")
+            outcome = await self.service.post_generated(self.prefix, request, self.fallback, what="fortune", can_send=can_send)
             if outcome == "sent":
                 self.posted += 1
                 self.log.emit("fortune_posted", attempts=attempts, subject=subject)
                 return True
-            if self._now() >= deadline:
+            if outcome not in ("rate-limited", "model-error") or self._now() >= deadline:
                 self.skipped += 1
                 self.log.emit("fortune_skipped", reason=outcome, attempts=attempts)
                 return False
             self.log.emit("fortune_deferred", reason=outcome, attempts=attempts)
-            await self._sleep_for(self.retry_s)
+            await self._sleep_for(min(self.retry_s, (deadline - self._now()).total_seconds()))
 
     async def _sleep_for(self, seconds: float) -> None:
         end = self._now() + timedelta(seconds=seconds)

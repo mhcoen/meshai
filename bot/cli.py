@@ -24,6 +24,7 @@ from bot.ratelimit import RateLimiter
 from bot.service import BotService, ChannelError
 from bot.fortune import FortuneScheduler
 from bot.utilization import UtilizationMonitor
+from bot.lifecycle import disconnect
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -132,28 +133,56 @@ async def connect(cfg: Config, attempts: int = 3, boot_delay_s: float = 2.5):
     port, because reopening would toggle the lines again.
     """
     meshcore = MeshCore(SerialConnection(cfg.port, 115200))
-    await meshcore.dispatcher.start()
+    connected = False
     try:
-        opened = await meshcore.connection_manager.connect()
-    except (SerialException, OSError) as exc:
-        await meshcore.disconnect()
-        raise ConnectError(f"cannot open {cfg.port}: {exc}\n{_port_hint(cfg.port)}") from None
-    if opened is None:
-        await meshcore.disconnect()
+        await meshcore.dispatcher.start()
+        try:
+            opened = await meshcore.connection_manager.connect()
+        except (SerialException, OSError) as exc:
+            raise ConnectError(f"cannot open {cfg.port}: {exc}\n{_port_hint(cfg.port)}") from None
+        if opened is None:
+            return None
+        release_boot_lines(meshcore)
+        await asyncio.sleep(boot_delay_s)
+        for attempt in range(1, attempts + 1):
+            res = await meshcore.commands.send_appstart()
+            if res is not None and res.type != EventType.ERROR:
+                connected = True
+                return meshcore
+            if attempt < attempts:
+                print(f"no handshake from {cfg.port}, retrying ({attempt}/{attempts})...", file=sys.stderr)
         return None
-    release_boot_lines(meshcore)
-    await asyncio.sleep(boot_delay_s)
-    for attempt in range(1, attempts + 1):
-        res = await meshcore.commands.send_appstart()
-        if res is not None and res.type != EventType.ERROR:
-            return meshcore
-        if attempt < attempts:
-            print(f"no handshake from {cfg.port}, retrying ({attempt}/{attempts})...", file=sys.stderr)
-    await meshcore.disconnect()
-    return None
+    finally:
+        if not connected:
+            await disconnect(meshcore)
 
 
 async def run(cfg: Config, headless: bool, log: EventLog) -> int:
+    """Handle signals even during port opening and the boot delay."""
+    loop = asyncio.get_running_loop()
+    owner = asyncio.current_task()
+    signalled = False
+
+    def request_stop() -> None:
+        nonlocal signalled
+        if not signalled:
+            signalled = True
+            owner.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, request_stop)
+    try:
+        return await _run(cfg, headless, log)
+    except asyncio.CancelledError:
+        if signalled:
+            return 0
+        raise
+    finally:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.remove_signal_handler(sig)
+
+
+async def _run(cfg: Config, headless: bool, log: EventLog) -> int:
     try:
         meshcore = await connect(cfg)
     except ConnectError as exc:
@@ -166,7 +195,18 @@ async def run(cfg: Config, headless: bool, log: EventLog) -> int:
             file=sys.stderr,
         )
         return 2
-    service = build_service(cfg, meshcore, log)
+    service = None
+    try:
+        service = build_service(cfg, meshcore, log)
+        return await _run_connected(cfg, service, headless, log)
+    finally:
+        if service is not None:
+            await service.stop()
+        else:
+            await disconnect(meshcore, log=log)
+
+
+async def _run_connected(cfg: Config, service: BotService, headless: bool, log: EventLog) -> int:
     loop = asyncio.get_running_loop()
 
     if headless:
@@ -174,7 +214,17 @@ async def run(cfg: Config, headless: bool, log: EventLog) -> int:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, stop.set)
         try:
-            await service.start()
+            startup = asyncio.create_task(service.start())
+            stopping = asyncio.create_task(stop.wait())
+            try:
+                await asyncio.wait((startup, stopping), return_when=asyncio.FIRST_COMPLETED)
+                if stopping.done():
+                    await service.stop()
+                    return 0
+                await startup
+            finally:
+                stopping.cancel()
+                await asyncio.gather(stopping, return_exceptions=True)
         except ChannelError as exc:
             print(f"error: {exc}", file=sys.stderr)
             await service.stop()

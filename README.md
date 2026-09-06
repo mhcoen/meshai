@@ -62,7 +62,7 @@ channel utilisation, and every message with the bot's decision on it:
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 210 tests that need no radio, no model, and no network
+- 212 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -527,8 +527,10 @@ plain ASCII, the injection check, the length cap with the word-budget
 retries, a global limiter token. If it still will not fit, `fortune_fallback`
 is posted instead. If the limiter is paused or the model fails, the bot
 retries every two minutes until `fortune_cutoff_min` after the slot, then
-skips the day and logs `fortune_skipped`. There is no catch-up after a
-restart, so a bot started at noon does not post a breakfast fortune. The
+skips the day and logs `fortune_skipped`. A day is only offered while its
+base time has not passed, so once today's fortune has gone out the next is
+tomorrow's, and a bot started after `fortune_time` waits for tomorrow rather
+than posting a breakfast fortune at noon or a second one after a restart. The
 monitor shows the next slot and the counts.
 
 ## Security

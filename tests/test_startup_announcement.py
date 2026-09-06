@@ -11,6 +11,7 @@ from meshcore import EventType
 from bot import __version__
 from bot.cli import main
 from bot.service import ChannelError
+from tests.conftest import FakeBackend, Harness, make_config
 from tests.test_queue import until
 
 
@@ -28,7 +29,9 @@ async def test_start_announces_name_and_version_once_without_model(harness, name
     h = harness(bot_name=name)
     await asyncio.gather(h.service.start(), h.service.start())
     await asyncio.wait_for(h.service._startup_announcement_task, 1)
-    assert h.sent == [(1, f"{display} v{__version__} online.")]
+    assert h.sent == [(1, f"{display} v{__version__}, LLM: {h.cfg.model}, https://github.com/mhcoen/meshai")]
+    assert len(h.sent[0][1]) <= h.cfg.reply_max_chars
+    assert len(f"{h.cfg.bot_name}: {h.sent[0][1]}".encode("utf-8")) <= 160
     assert h.backend.calls == []
     assert h.limiter.snapshot()["global_tokens"] == 0
     assert [r for r in h.records if r["event"] == "startup"][0]["version"] == __version__
@@ -64,7 +67,7 @@ async def test_start_announcement_waits_for_rate_token(harness, clock):
     assert h.sent == []
     clock.advance(15)
     await asyncio.wait_for(task, 1)
-    assert h.sent == [(1, f"MeshAI v{__version__} online.")]
+    assert h.sent == [(1, f"MeshAI v{__version__}, LLM: {h.cfg.model}, https://github.com/mhcoen/meshai")]
     await h.service.stop()
 
 
@@ -139,4 +142,25 @@ async def test_failed_start_has_no_announcement(harness):
         await h.service.start()
     assert h.service._startup_announcement_task is None
     assert h.sent == []
+    await h.service.stop()
+
+
+@pytest.mark.parametrize("backend,model", [("ollama", "gemma3:12b"), ("openai", "local-model")])
+async def test_start_announces_configured_model_for_either_backend(clock, backend, model):
+    h = Harness(make_config(backend=backend, model=model), FakeBackend(), clock)
+    await h.service.start()
+    await asyncio.wait_for(h.service._startup_announcement_task, 1)
+    assert h.sent == [(1, f"MeshAI v{__version__}, LLM: {model}, https://github.com/mhcoen/meshai")]
+    assert h.backend.calls == []
+    await h.service.stop()
+
+
+@pytest.mark.parametrize("model", ["model" * 40, "caf\u00e9", "model\nname"])
+async def test_invalid_startup_identification_is_skipped_without_truncation(harness, model):
+    h = harness(model=model)
+    await h.service.start()
+    await asyncio.wait_for(h.service._startup_announcement_task, 1)
+    assert h.sent == [] and h.backend.calls == []
+    assert h.limiter.snapshot()["global_tokens"] == 1
+    assert any(r["event"] == "announce_failed" and r["what"] == "startup" for r in h.records)
     await h.service.stop()

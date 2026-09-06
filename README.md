@@ -67,7 +67,7 @@ channel utilisation, and every message with the bot's decision on it:
   as prior chat turns
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
-- Announces its name and version once at startup; clean shutdown on SIGINT
+- Announces its name, version, LLM, and repository link once at startup; clean shutdown on SIGINT
   and SIGTERM
 - Tests that need no radio, no model, and no network
 
@@ -321,12 +321,20 @@ what the radio heard that the bot never received (see
 level log to `<log file>.debug`. Stop it with Ctrl-C or SIGTERM; the bot
 unsubscribes, stops message fetching, and closes the port.
 
-After a successful start, the bot announces its name and package version, for
-example `MeshAI v1.2.0 online.` (also available locally with `meshai --version`).
+After a successful start, the bot announces its name, package version, configured
+LLM, and repository link in one message, for example:
+
+```text
+MeshAI v1.2.0, LLM: qwen3:30b-a3b-instruct-2507-q4_K_M, https://github.com/mhcoen/meshai
+```
+
+The package version is also available locally with `meshai --version`.
 This uses the normal ASCII/length checks, injection gate, and rate limits, with
 the initial reply delay. It defers behind queued replies and congestion for up
 to ten minutes, then skips the announcement if still blocked. It does not use
 the model or repeat on reconnect; a failed send is logged, not retried.
+If the configured name/model makes the line too long or the model identifier is
+not printable ASCII, it is logged and skipped without truncation; the bot still starts.
 
 Then send a message on the channel from your phone. The bot answers every
 message on the channel by default. To make it answer only messages that

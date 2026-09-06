@@ -18,8 +18,8 @@ def test_parse_command_prefix_and_case():
 
 def test_help_line_lists_every_persona_and_the_timeout():
     line = build_help(["funny", "marvin"], 120, "/")
-    assert line == "/funny /marvin change my personality for 120 min, /reset restores it."
-    assert build_help(["a"], 90.5, "/").startswith("/a change my personality for 90.5 min")
+    assert line == "/funny /marvin switch my voice for 120 min, /reset restores it, /forget wipes my memory of you."
+    assert build_help(["a"], 90.5, "/").startswith("/a switch my voice for 90.5 min")
 
 
 def test_builtin_presets_carry_the_safety_clauses():

@@ -59,10 +59,12 @@ channel utilisation, and every message with the bot's decision on it:
 - Token bucket rate limits, global and per sender name, as a burst floor
 - Bounded in memory history rendered to the model as untrusted background,
   never as prior chat turns
+- Per-person memory of recent exchanges, so follow-up questions make sense;
+  bounded per person, by age, and by population, with `/forget` to wipe it
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
 - Clean shutdown on SIGINT and SIGTERM
-- 218 tests that need no radio, no model, and no network
+- 229 tests that need no radio, no model, and no network
 
 ## Quick start
 
@@ -343,14 +345,15 @@ part is whatever the sending node put there; nothing verifies it.
 6. **Rate limits.** A global token bucket and one per sender name. Tokens are
    taken here, once, and whatever goes out for this message rides on them.
    When a bucket is empty the message is dropped and logged.
-7. **Context.** The last `history_size` channel lines, including the bot's
+7. **Context.** The sender's remembered exchanges (see [Per-person memory](#per-person-memory)) and the last `history_size` channel lines, including the bot's
    own posts and excluding lines the detector flagged when they arrived, are
    rendered as `Sender: text`, trimmed from the oldest end to
    `transcript_max_chars`, and placed in one user message after the current
    prompt, between markers that label them as untrusted. History is never
    replayed as earlier chat turns.
-8. **Injection check, context.** Fragments that pass one at a time but add up to an
-   instruction are caught here.
+8. **Injection check, context.** The transcript, the sender's remembered
+   exchanges, and the prompt together, so fragments that pass one at a time
+   but add up to an instruction are caught here.
 9. **Model.** One call under a hard timeout of `model_timeout_s`. On a
    timeout or any error the fixed `apology` text is posted instead.
 10. **Shape.** Strip any leaked `<think>` block, collapse whitespace, reduce
@@ -371,7 +374,7 @@ part is whatever the sending node put there; nothing verifies it.
 Every inbound message produces one `inbound` record in the JSON log with
 `sender`, `prompt`, `path_len`, `decision`, and the reason, or the injection
 score and matched rules, when it was dropped. Decisions: `answered`,
-`answered:too-long-fallback`, `answered:help`, `answered:reset`,
+`answered:too-long-fallback`, `answered:help`, `answered:reset`, `answered:forget`,
 `persona-switched`, `apology`, `dropped:loop-guard`, `dropped:no-trigger`, `dropped:too-long`,
 `dropped:injection-blocked`, `dropped:rate-limited`, `dropped:empty-reply`,
 `dropped:send-failed`.
@@ -487,6 +490,10 @@ any key may appear in any section.
 | `tx_duty_budget` | `0.02` | The dial: share of channel time for the bot's own transmissions |
 | `history_size` | `20` | Channel lines kept in memory |
 | `transcript_max_chars` | `1500` | Size of the transcript given to the model |
+| `person_memory_rounds` | `20` | Answered exchanges remembered per sender name |
+| `person_memory_days` | `7` | Rounds older than this are dropped |
+| `person_memory_people` | `500` | Names remembered at once, least recently seen out first |
+| `person_memory_max_chars` | `600` | Size of the remembered block given to the model |
 | `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |
 | `rx_log` | `channel` | Log packets the radio hears: `off`, `channel` (the served channel), or `all` |
 | `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshai.jsonl` (monitor) |
@@ -508,6 +515,7 @@ default) followed by a preset name:
 /marvin      switch, silently; the next reply shows the new voice
 /help        one line listing the commands and the timeout
 /reset       back to the default at once, with a message saying so
+/forget      wipe what the bot remembers of you
 ```
 
 A switched personality reverts to the default after `persona_timeout_min`
@@ -541,6 +549,27 @@ Madison mesh; replace them with yours.
 `temperature` matters too: 0.3 gives flat and reliable, 0.6 (the default)
 gives a persona room, above 0.8 gets loose. Restart the bot after changing
 the config.
+
+### Per-person memory
+
+The bot remembers what each sender name asked and what it replied, for the
+last `person_memory_rounds` answered exchanges (20), and hands them to the
+model in their own labelled block ahead of the channel history, so "what
+did I ask you earlier" and follow-up questions work. Only exchanges that got
+a real answer are recorded; drops, apologies, and the fixed too-long line
+are not.
+
+Garbage collection has three parts, each a config key: rounds beyond the
+per-person cap fall off the old end; rounds older than `person_memory_days`
+(7) are dropped; and no more than `person_memory_people` (500) names are
+held at once, least recently seen out first, which is also what stops a
+name-rotating flood from filling it. `/forget` wipes the bot's memory of
+the sender that sent it. Everything is in memory only and a restart clears
+it.
+
+Sender names are not authenticated, so this is continuity for a
+conversation, not identity: anyone can claim a name and inherit its
+context.
 
 ### The daily fortune
 

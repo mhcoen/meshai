@@ -20,7 +20,7 @@ from bot.service import Stats
 class MeshAIApp(App[None]):
     TITLE = "MeshAI"
     CSS = """
-    Horizontal#top { height: 13; }
+    Horizontal#top { height: 14; }
     #status, #limits, #util { width: 1fr; border: round $primary; padding: 0 1; }
     #log { border: round $secondary; height: 1fr; }
     """
@@ -97,7 +97,8 @@ class MeshAIApp(App[None]):
             f"         injection-blocked {s.injection_blocks}  rate-limited {s.rate_limited}\n"
             f"         send-err {s.send_errors}  model-err {s.model_errors}\n"
             f"         shorten-retries {s.shorten_retries}  too-long-fallbacks {s.fallbacks_sent}\n"
-            f"[b]Fortune[/b] {self._fortune_text()}"
+            f"[b]Fortune[/b] {self._fortune_text()}\n"
+            f"[b]Memory[/b]  {s.people_remembered} people, {s.rounds_remembered} rounds"
         )
         snap = self._limiter.snapshot()
         senders = "\n".join(
@@ -154,7 +155,7 @@ class MeshAIApp(App[None]):
                 extra = f" [{record.get('reason')}]"
             elif decision == "persona-switched":
                 extra = f" -> persona {record.get('persona')}"
-            elif decision in ("answered", "answered:too-long-fallback", "answered:help", "answered:reset", "apology"):
+            elif decision in ("answered", "answered:too-long-fallback", "answered:help", "answered:reset", "answered:forget", "apology"):
                 extra = f" -> {record.get('reply')}"
             line = (
                 f"{ts} {record.get('sender', '?')!s:<16} hops={record.get('path_len')} "
@@ -173,7 +174,7 @@ class MeshAIApp(App[None]):
             "startup", "shutdown", "connected", "disconnected", "send_error", "injection_block",
             "shutdown_error", "utilization_error", "reply_too_long", "persona_switch", "persona_reset",
             "announce", "announce_failed", "persona_timer_error", "fortune_scheduled", "fortune_posted",
-            "fortune_deferred", "fortune_skipped", "fortune_error", "post", "post_error",
+            "fortune_deferred", "fortune_skipped", "fortune_error", "post", "post_error", "memory_forget",
         ):
             details = {k: v for k, v in record.items() if k not in ("ts", "event")}
             line = f"{ts} [{event}] {details}"

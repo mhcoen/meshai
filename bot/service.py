@@ -238,11 +238,18 @@ class BotService:
 
     async def _announce_startup(self) -> None:
         try:
+            name = plain_ascii(self.cfg.bot_name) or "MeshAI"
+            text = f"{name} v{__version__}, LLM: {self.cfg.model}, https://github.com/mhcoen/meshai"
+            # Do not rewrite a model identifier or truncate the repository URL.
+            if (any(not " " <= c <= "~" for c in text)
+                    or len(text) > self.cfg.reply_max_chars
+                    or len(text.encode("utf-8")) > self._reply_max_bytes):
+                self.log.emit("announce_failed", what="startup", reason="startup identification is not printable ASCII or exceeds the wire budget")
+                return
             # Allow any fetched messages/repeater traffic to settle first. This
             # is background work so waiting never holds up startup or ingestion.
             await self._hold_for_quiet_channel(self._clock())
-            name = plain_ascii(self.cfg.bot_name) or "MeshAI"
-            await self._announce(f"{name} v{__version__} online.", "startup", give_up_after_s=600.0)
+            await self._announce(text, "startup", give_up_after_s=600.0)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - an announcement must not take the bot down

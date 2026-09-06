@@ -70,3 +70,19 @@ def test_cli_check_prints_the_report_and_exits_zero(tmp_path, capsys):
 def test_cli_check_missing_file(tmp_path, capsys):
     assert main(["--check", str(tmp_path / "nope.jsonl")]) == 1
     assert "not found" in capsys.readouterr().err
+
+
+def test_waiting_messages_count_as_delivered_without_double_counting_decisions(tmp_path):
+    log = tmp_path / "meshai.jsonl"
+    write_log(log, [
+        {"event": "startup", "bot_name": "MeshAI"},
+        rx("t1", "Alice: hello"),
+        {"event": "received", "sender": "Alice", "prompt": "hello"},
+        {"event": "received", "sender": "Alice", "prompt": "hello"},
+        inbound("t2", "Alice", "hello"),  # Second identical question is still waiting.
+        rx("t3", "Bob: question"),
+        {"event": "received", "sender": "Bob", "prompt": "question"},
+    ])
+    result = check_log(log)
+    assert result.delivered == 3 and result.undelivered == []
+    assert result.decisions == {"answered": 1}

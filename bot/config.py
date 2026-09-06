@@ -10,6 +10,7 @@ backend so it can never end up in a log record or a dumped config.
 from __future__ import annotations
 
 import os
+import math
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
@@ -18,6 +19,7 @@ from typing import Any
 
 from bot.fortune import parse_hhmm
 from bot.personas import BUILTIN_PERSONAS, FORGET_COMMAND, HELP_COMMAND, NAME_RE, RESET_COMMAND, build_help
+from bot.reply import plain_ascii
 
 ENV_PREFIX = "MESHAI_"
 API_KEY_ENV = "MESHAI_OPENAI_API_KEY"
@@ -87,6 +89,8 @@ class Config:
     global_burst: int = 1
     sender_rate_per_min: float = 4.0
     sender_burst: int = 1
+    queue_max_pending: int = 10
+    queue_wait_s: float = 600.0
 
     # [history]
     history_size: int = 20
@@ -113,6 +117,19 @@ class Config:
 
     def validate(self) -> "Config":
         errors: list[str] = []
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, float) and not math.isfinite(value):
+                errors.append(f"{f.name} must be finite")
+        if errors:
+            raise ConfigError("; ".join(errors))
+        for name in ("apology", "too_long_reply", "persona_reset_message", "fortune_fallback", "fortune_prefix", "command_prefix"):
+            value = getattr(self, name)
+            if any(not " " <= c <= "~" for c in value) or plain_ascii(value) != value.strip():
+                errors.append(f"{name} must use printable ASCII and ordinary punctuation")
+        for name in ("apology", "fortune_fallback"):
+            if not getattr(self, name).strip():
+                errors.append(f"{name} must not be empty")
         if not self.port:
             errors.append("port is required (radio.port or MESHAI_PORT)")
         if not 0 <= self.channel_idx <= 255:
@@ -145,6 +162,8 @@ class Config:
             errors.append("shorten_retries must not be negative")
         if not self.too_long_reply.strip():
             errors.append("too_long_reply must not be empty")
+        if len(self.too_long_reply) > self.reply_max_chars - 24:
+            errors.append("too_long_reply must fit with room for a 20 character sender name")
         if self.reply_delay_s < 0:
             errors.append("reply_delay_s must not be negative")
         if self.model_timeout_s <= 0:
@@ -167,7 +186,7 @@ class Config:
         if not self.personas:
             errors.append("personas must not be empty")
         for name, text in self.personas.items():
-            if not NAME_RE.match(name):
+            if not NAME_RE.fullmatch(name):
                 errors.append(f"persona name {name!r} must be lowercase letters, digits, underscores, at most 16 chars")
             if name in (HELP_COMMAND, RESET_COMMAND, FORGET_COMMAND):
                 errors.append(f"persona name {name!r} collides with a command")
@@ -184,13 +203,17 @@ class Config:
         room = self.reply_max_chars - len("@[") - 20 - len("] ")  # a 20 char sender name
         if self.reply_max_chars > 0 and len(self.help_message) > room:
             errors.append(f"the help line is {len(self.help_message)} chars; it must fit in {room} (fewer or shorter persona names)")
-        if self.reply_max_chars > 0 and len(self.persona_reset_message) > self.reply_max_chars:
-            errors.append("persona_reset_message must fit in reply_max_chars")
+        if self.reply_max_chars > 0 and len(self.persona_reset_message) > room:
+            errors.append("persona_reset_message must fit with room for a 20 character sender name")
         if self.max_tokens <= 0:
             errors.append("max_tokens must be positive")
         for name in ("global_rate_per_min", "sender_rate_per_min"):
             if getattr(self, name) <= 0:
                 errors.append(f"{name} must be positive")
+        if self.queue_max_pending < 0:
+            errors.append("queue_max_pending must not be negative")
+        if self.queue_wait_s <= 0:
+            errors.append("queue_wait_s must be positive")
         if self.person_memory_days <= 0 or self.person_memory_max_chars < 0:
             errors.append("person_memory_days must be positive and person_memory_max_chars not negative")
         for name in ("global_burst", "sender_burst", "history_size", "person_memory_rounds", "person_memory_people"):
@@ -245,7 +268,7 @@ def _coerce(name: str, value: Any) -> Any:
             raise ConfigError(f"{name}: expected an integer, got {value!r}")
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ConfigError(f"{name}: expected an integer, got {value!r}") from None
     if target is float:
         if isinstance(value, bool):

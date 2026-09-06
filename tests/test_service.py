@@ -307,7 +307,7 @@ async def test_injected_prompt_never_reaches_model_or_radio(harness, attack):
     assert h.backend.calls == []
     assert h.sent == []
     rec = h.inbound_records()[-1]
-    assert rec["point"] == "prompt"
+    assert rec["point"] == "transcript-line"
     assert rec["injection_score"] >= 0.45
     assert rec["injection_rules"]
     assert h.service.stats.injection_blocks >= 1
@@ -460,7 +460,8 @@ async def test_start_refuses_empty_channel(harness):
 
 async def test_concurrent_messages_keep_history_order(harness):
     h = harness(backend=FakeBackend(delay=0.01), global_burst=5, sender_burst=5)
-    await asyncio.gather(h.say("A: first"), h.say("B: second"), h.say("C: third"))
+    decisions = await asyncio.gather(h.say("A: first"), h.say("B: second"), h.say("C: third"))
     senders = [e.sender for e in h.history.entries()]
     assert senders[:3] == ["A", "B", "C"]
-    assert len(h.sent) == 3
+    assert len(h.sent) == 1
+    assert decisions == [Decision.ANSWERED, Decision.DROP_RATE_LIMITED, Decision.DROP_RATE_LIMITED]

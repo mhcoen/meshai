@@ -156,7 +156,7 @@ async def test_openai_backend_posts_chat_completions():
     client = httpx.AsyncClient(base_url="http://llm.local/v1", transport=httpx.MockTransport(handler))
     backend = OpenAICompatBackend("http://llm.local/v1", "m", 0.2, 50, api_key=None, http_client=client)
     out = await backend.complete([{"role": "user", "content": "2+2?"}])
-    assert out == "Four."
+    assert out.text == "Four." and not out.truncated
     assert seen["url"] == "http://llm.local/v1/chat/completions"
     body = json.loads(seen["json"])
     assert body["max_tokens"] == 50

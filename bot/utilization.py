@@ -105,11 +105,13 @@ class Streaks:
     def __init__(self) -> None:
         self.over = 0
         self.under = 0
+        self._target = "full"
 
     def update(self, duty: float, current: str, low: float, high: float) -> tuple[int, int]:
         target = target_level(duty, low, high)
         cur_i, tgt_i = LEVELS.index(current), LEVELS.index(target)
-        self.over = self.over + 1 if tgt_i > cur_i else 0
+        self.over = (self.over + 1 if target == self._target else 1) if tgt_i > cur_i else 0
+        self._target = target
         guard = high if current == "paused" else low
         self.under = self.under + 1 if (tgt_i < cur_i and duty < guard * RELAX_MARGIN) else 0
         return self.over, self.under
@@ -169,11 +171,17 @@ class UtilizationMonitor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - never let the monitor kill the bot
+                self._reset_window()
                 self.errors += 1
                 self.log.emit("utilization_error", error=f"{type(exc).__name__}: {exc}")
             await asyncio.sleep(self.poll_s)
 
     # ------------------------------------------------------------------ sampling
+
+    def _reset_window(self) -> None:
+        self._samples.clear()
+        self._rx_streak = Streaks()
+        self._tx_streak = Streaks()
 
     async def sample(self) -> Utilization | None:
         """Poll both counters once, update the window, apply the policy. Returns the reading."""
@@ -182,6 +190,7 @@ class UtilizationMonitor:
         packets = await self.mc.commands.get_stats_packets()
         for name, res in (("get_stats_radio", radio), ("get_stats_packets", packets)):
             if res is None or res.type == EventType.ERROR:
+                self._reset_window()
                 self.errors += 1
                 self.log.emit("utilization_error", command=name, error=str(getattr(res, "payload", None)))
                 return self.current
@@ -200,10 +209,14 @@ class UtilizationMonitor:
             sample.tx_air < self._samples[-1].tx_air
             or sample.rx_air < self._samples[-1].rx_air
             or sample.recv < self._samples[-1].recv
+            or sample.sent < self._samples[-1].sent
+            or sample.t - self._samples[-1].t > max(self.window_s, self.poll_s * 2)
         ):
-            self._samples.clear()  # the radio's counters reset (reboot); start the window over
+            self._reset_window()
         self._samples.append(sample)
-        while len(self._samples) > 1 and sample.t - self._samples[0].t > self.window_s:
+        # Keep the sample at/before the boundary, even when polling takes slightly
+        # longer than a window. Gaps in collection are reset above.
+        while len(self._samples) > 2 and sample.t - self._samples[1].t >= self.window_s:
             self._samples.popleft()
 
         oldest = self._samples[0]

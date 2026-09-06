@@ -109,7 +109,9 @@ class MeshAIApp(App[None]):
             f"global  {snap['global_tokens']:.2f}/{snap['global_capacity']} tokens\n"
             f"        {snap['global_per_min']:g}/min effective "
             f"(configured {cfg.global_rate_per_min:g}/min x {snap['global_factor']:g})\n"
-            f"per-sender {cfg.sender_rate_per_min:g}/min, recent:\n{senders}"
+            f"per-sender {cfg.sender_rate_per_min:g}/min, recent:\n{senders}\n"
+            f"queue {s.queue_depth}/{cfg.queue_max_pending}, active {'yes' if s.reply_active else 'no'}\n"
+            f"expired {s.queue_expired}, queue-full {s.queue_full}"
         )
         self.query_one("#status", Static).update(status)
         self.query_one("#limits", Static).update(limits)
@@ -175,6 +177,7 @@ class MeshAIApp(App[None]):
             "shutdown_error", "utilization_error", "reply_too_long", "persona_switch", "persona_reset",
             "announce", "announce_failed", "persona_timer_error", "fortune_scheduled", "fortune_posted",
             "fortune_deferred", "fortune_skipped", "fortune_error", "post", "post_error", "memory_forget",
+            "queued", "dequeued",
         ):
             details = {k: v for k, v in record.items() if k not in ("ts", "event")}
             line = f"{ts} [{event}] {details}"

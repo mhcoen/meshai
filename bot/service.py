@@ -6,10 +6,11 @@ Order of checks for an inbound message (first failure wins, every outcome is log
   3. length       - prompt over prompt_max_chars
   4. injection    - the prompt itself
   5. injection    - the assembled context (transcript, sender memory, prompt)
-  6. rate limits  - global and per-sender tokens, taken once, here
+  6. queue/limits - bounded FIFO wait, then reserve global and per-sender tokens
 then: model (hard timeout) ->
-injection check on the reply -> shape -> cap -> send. A model timeout or error sends the
-fixed apology on the tokens already taken. An injection block anywhere sends nothing.
+shape -> injection check -> shortening if needed -> final line check -> send.
+Unused reservations are refunded. Refills restart at transmission, and a utilization
+pause before transmission retains an active answer until transmission is allowed.
 """
 
 from __future__ import annotations
@@ -17,24 +18,28 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+from collections import deque
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
 from meshcore import EventType
 
-from bot.backends import Backend
-from bot.config import Config
-from bot.guard import InjectionGate
+from bot import __version__
+from bot.backends import Backend, Completion
+from bot.config import Config, WIRE_TEXT_MAX
+from bot.guard import InjectionGate, Verdict
 from bot.history import History, HistoryEntry, render_transcript
 from bot.jsonlog import EventLog
 from bot.memory import PersonMemory, render_rounds
 from bot.parse import extract_prompt, parse_channel_text
 from bot.personas import FORGET_COMMAND, LORA_FACTS, RESET_COMMAND, parse_command, radio_facts
 from bot.prompt import build_messages
-from bot.ratelimit import RateLimiter
-from bot.reply import compose_reply, shape_reply
+from bot.ratelimit import RateLimiter, Reservation
+from bot.reply import compose_reply, shape_reply, reply_prefix, reply_body_room, plain_ascii
+from bot.lifecycle import close_step, disconnect
 
 
 class Decision(str, Enum):
@@ -50,6 +55,8 @@ class Decision(str, Enum):
     DROP_TOO_LONG = "dropped:too-long"
     DROP_INJECTION = "dropped:injection-blocked"
     DROP_RATE_LIMITED = "dropped:rate-limited"
+    DROP_QUEUE_FULL = "dropped:queue-full"
+    DROP_QUEUE_EXPIRED = "dropped:queue-expired"
     DROP_EMPTY = "dropped:empty-reply"
     DROP_SEND_FAILED = "dropped:send-failed"
     IGNORED_OTHER_CHANNEL = "ignored:other-channel"
@@ -57,6 +64,29 @@ class Decision(str, Enum):
 
 class ChannelError(RuntimeError):
     """The configured channel index is empty or could not be read."""
+
+
+class InjectionBlocked(Exception):
+    def __init__(self, verdict: Verdict, point: str):
+        self.verdict = verdict
+        self.point = point
+
+
+class PostExpired(Exception):
+    pass
+
+
+class TransmissionPaused(Exception):
+    pass
+
+
+@dataclass
+class PendingReply:
+    sender: str
+    reservation: Reservation | None = None
+    remember: bool = True
+    can_send: Callable[[], bool] = lambda: True
+    retain_on_pause: bool = False
 
 
 @dataclass
@@ -69,6 +99,10 @@ class Stats:
     apologies_sent: int = 0
     injection_blocks: int = 0
     rate_limited: int = 0
+    queue_depth: int = 0
+    queue_expired: int = 0
+    queue_full: int = 0
+    reply_active: bool = False
     send_errors: int = 0
     model_errors: int = 0
     shorten_retries: int = 0
@@ -100,6 +134,7 @@ class BotService:
         fortune: Any = None,
     ):
         self.cfg = cfg
+        self._reply_max_bytes = WIRE_TEXT_MAX - len(f"{cfg.bot_name}: ".encode("utf-8"))
         self.mc = meshcore
         self.backend = backend
         self.gate = gate
@@ -125,10 +160,33 @@ class BotService:
         self._persona_deadline: float | None = None  # monotonic clock value
         self._persona_task: asyncio.Task[None] | None = None
         self.timer_tick_s = 30.0  # how often the persona timer re-checks the clock (tests shrink it)
+        self.shutdown_timeout_s = 3.0
+        self._requests: dict[asyncio.Task, PendingReply] = {}
+        self._waiting: deque[asyncio.Task] = deque()
+        self._active_request: asyncio.Task | None = None
+        self.queue_tick_s = 1.0  # clock/limiter recheck; tests use a shorter tick
+        self._start_task: asyncio.Task | None = None
+        self._stop_task: asyncio.Task | None = None
+        self._memory_task: asyncio.Task | None = None
+        self._startup_announcement_task: asyncio.Task | None = None
+        self._started = False
 
     # ------------------------------------------------------------------ lifecycle
 
     async def start(self) -> None:
+        if self._stopped or self._started:
+            return
+        if self._start_task is not None:
+            await asyncio.shield(self._start_task)
+            return
+        self._start_task = asyncio.current_task()
+        try:
+            await self._start()
+            self._started = True
+        finally:
+            self._start_task = None
+
+    async def _start(self) -> None:
         result = await self.mc.commands.get_channel(self.cfg.channel_idx)
         if result is None or result.type == EventType.ERROR:
             raise ChannelError(
@@ -148,6 +206,7 @@ class BotService:
             channel_idx=self.cfg.channel_idx,
             channel_name=name,
             bot_name=self.cfg.bot_name,
+            version=__version__,
             backend=self.backend.name,
             model=self.cfg.model,
             trigger_prefix=self.cfg.trigger_prefix,
@@ -172,27 +231,51 @@ class BotService:
             self.monitor.start()
         if self.fortune is not None:
             self.fortune.start()
+        self._memory_task = asyncio.create_task(self._memory_gc(), name="memory-gc")
+        self._startup_announcement_task = asyncio.create_task(
+            self._announce_startup(), name="startup-announcement"
+        )
+
+    async def _announce_startup(self) -> None:
+        try:
+            # Allow any fetched messages/repeater traffic to settle first. This
+            # is background work so waiting never holds up startup or ingestion.
+            await self._hold_for_quiet_channel(self._clock())
+            name = plain_ascii(self.cfg.bot_name) or "MeshAI"
+            await self._announce(f"{name} v{__version__} online.", "startup", give_up_after_s=600.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - an announcement must not take the bot down
+            self.log.emit("announce_failed", what="startup", reason=f"{type(exc).__name__}: {exc}")
 
     async def stop(self) -> None:
-        if self._stopped:
-            return
-        self._stopped = True
-        await self._cancel_persona_timer()
-        if self.fortune is not None:
-            await self.fortune.stop()
-        if self.monitor is not None:
-            await self.monitor.stop()
+        if self._stop_task is None:
+            self._stopped = True
+            self._stop_task = asyncio.create_task(self._stop(), name="bot-shutdown")
+        await asyncio.shield(self._stop_task)
+
+    async def _stop(self) -> None:
         for sub in self._subs:
             try:
                 self.mc.unsubscribe(sub)
             except Exception:  # noqa: BLE001
                 pass
         self._subs.clear()
-        for step in (self.mc.stop_auto_message_fetching, self.mc.disconnect, self.backend.aclose):
-            try:
-                await step()
-            except Exception as exc:  # noqa: BLE001
-                self.log.emit("shutdown_error", step=getattr(step, "__name__", str(step)), error=str(exc))
+        tasks = set(self._requests)
+        tasks.update(task for task in (self._start_task, self._memory_task, self._startup_announcement_task) if task is not None)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._memory_task = None
+        self._startup_announcement_task = None
+        await self._cancel_persona_timer()
+        for worker in (self.fortune, self.monitor):
+            if worker is not None:
+                await close_step(worker.stop, self.shutdown_timeout_s, self.log)
+        await close_step(self.mc.stop_auto_message_fetching, self.shutdown_timeout_s, self.log)
+        await disconnect(self.mc, self.shutdown_timeout_s, self.log)
+        await close_step(self.backend.aclose, self.shutdown_timeout_s, self.log)
         self.stats.connected = False
         self.log.emit("shutdown", replies_sent=self.stats.replies_sent)
 
@@ -243,6 +326,21 @@ class BotService:
         return decision
 
     async def handle_payload(self, payload: dict[str, Any]) -> Decision:
+        parsed = parse_channel_text(payload.get("text", "") or "")
+        if self._stopped or len(self._requests) >= 512:
+            return self._record(parsed, payload.get("path_len"), Decision.DROP_RATE_LIMITED, reason="stopped" if self._stopped else "busy")
+        async with self._request(parsed.sender):
+            try:
+                return await self._handle_payload(payload)
+            except InjectionBlocked as exc:
+                return self._record(parsed, payload.get("path_len"), Decision.DROP_INJECTION,
+                                    point=exc.point, injection_score=exc.verdict.score,
+                                    injection_rules=list(exc.verdict.rules), injection_error=exc.verdict.error)
+            except TransmissionPaused:
+                self.stats.rate_limited += 1
+                return self._record(parsed, payload.get("path_len"), Decision.DROP_RATE_LIMITED, reason="paused-before-send")
+
+    async def _handle_payload(self, payload: dict[str, Any]) -> Decision:
         cfg = self.cfg
         received_at = self._clock()
         chan = payload.get("channel_idx")
@@ -254,6 +352,8 @@ class BotService:
             return self._record(parsed, path_len, Decision.IGNORED_OTHER_CHANNEL, channel_idx=chan)
 
         self.stats.received += 1
+        self.log.emit("received", sender=parsed.sender, prompt=parsed.body, path_len=path_len)
+        self.memory.sweep()
 
         # 1a. Our own post coming back. Already in history from send time; never answer it.
         if parsed.sender == cfg.bot_name:
@@ -280,6 +380,7 @@ class BotService:
                 rules=list(line_verdict.rules),
                 error=line_verdict.error,
             )
+            raise InjectionBlocked(line_verdict, "transcript-line")
 
         # 1b. Replies from bots (ours or anyone's) are never prompts.
         if parsed.body.startswith("@["):
@@ -293,6 +394,7 @@ class BotService:
         # 2b. Commands: a preset name switches the voice silently; help and reset transmit.
         command = parse_command(prompt, cfg.command_prefix)
         if command is not None:
+            self._check(prompt, "prompt")
             return await self._handle_command(parsed, path_len, command, received_at)
 
         # 3. Length.
@@ -333,27 +435,32 @@ class BotService:
                 injection_error=context_verdict.error,
             )
 
-        # 6. Rate limits, taken once for whatever we end up sending.
-        limit = self.limiter.allow(parsed.sender)
+        available = reply_body_room(parsed.sender, cfg.reply_max_chars, self._reply_max_bytes)
+        if available < max(len(cfg.apology), len(cfg.too_long_reply)):
+            return self._record(parsed, path_len, Decision.DROP_EMPTY, reason="sender-name leaves no room for fixed replies")
+        # 6. Keep the ingestion transcript snapshot, but read memory again after
+        # waiting so earlier answers and /forget are reflected in this request.
+        limit = await self._wait_for_admission(parsed.sender, received_at)
         if not limit.allowed:
-            self.stats.rate_limited += 1
-            return self._record(parsed, path_len, Decision.DROP_RATE_LIMITED, reason=limit.reason)
-
-        prefix_len = len(f"@[{parsed.sender}] ")
+            return self._queue_drop(parsed, path_len, limit.reason)
+        state = self._requests[asyncio.current_task()]
+        memory_block = render_rounds(self.memory.rounds_for(parsed.sender), cfg.person_memory_max_chars) if state.remember else ""
+        self._check("\n".join(part for part in (transcript, memory_block, prompt) if part), "context")
         # Models overshoot a stated character budget by 10 to 20 percent, so state 80 percent of
         # the real room; the hard cap in compose_reply still enforces the true limit.
-        budget = max(1, int((cfg.reply_max_chars - prefix_len) * 0.8))
+        budget = max(1, int(available * 0.8))
         messages = build_messages(
             cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona], self.facts, memory_block
         )
 
         # Model, under a hard timeout per call. A reply that does not fit goes back to the
         # model with the exact limit; nothing is ever cut mid-sentence.
-        available = cfg.reply_max_chars - prefix_len
         started = self._clock()
         fallback = False
         try:
-            shaped, retries, latency_ms = await self._generate_fitting(messages, available)
+            shaped, retries, latency_ms, truncated = await self._generate_fitting(messages, available)
+        except InjectionBlocked:
+            raise
         except asyncio.TimeoutError:
             self.stats.model_errors += 1
             self.stats.last_latency_ms = round((self._clock() - started) * 1000.0, 1)
@@ -361,12 +468,12 @@ class BotService:
         except Exception as exc:  # noqa: BLE001
             self.stats.model_errors += 1
             return await self._send_apology(parsed, path_len, received_at, reason=f"{type(exc).__name__}: {exc}")
-        if not shaped.strip():
+        if not shaped.strip() and not truncated:
             self.stats.model_errors += 1
             return await self._send_apology(parsed, path_len, received_at, reason="empty reply")
 
         # Outbound.
-        if len(shaped) > available:
+        if len(shaped) > available or truncated:
             fallback = True
             self.stats.fallbacks_sent += 1
             self.log.emit("reply_too_long", sender=parsed.sender, length=len(shaped), limit=available, retries=retries)
@@ -384,15 +491,15 @@ class BotService:
                 injection_error=out_verdict.error,
                 latency_ms=latency_ms,
             )
-        reply = compose_reply(parsed.sender, shaped, cfg.reply_max_chars)
+        reply = compose_reply(parsed.sender, shaped, cfg.reply_max_chars, max_bytes=self._reply_max_bytes)
         if reply is None:
             return self._record(parsed, path_len, Decision.DROP_EMPTY, latency_ms=latency_ms)
 
         held_ms = await self._hold_for_quiet_channel(received_at)
         decision = Decision.ANSWERED_FALLBACK if fallback else Decision.ANSWERED
-        if await self._send(reply):
+        if await self._send(reply, mention_sender=parsed.sender):
             self.stats.replies_sent += 1
-            if not fallback:
+            if not fallback and self._requests[asyncio.current_task()].remember:
                 self.memory.record(parsed.sender, prompt, shaped)
                 self._update_memory_stats()
             return self._record(
@@ -401,6 +508,89 @@ class BotService:
         return self._record(parsed, path_len, Decision.DROP_SEND_FAILED, reply=reply, latency_ms=latency_ms)
 
     # ------------------------------------------------------------------ helpers
+
+    @asynccontextmanager
+    async def _request(self, sender: str, can_send: Callable[[], bool] = lambda: True):
+        task = asyncio.current_task()
+        state = PendingReply(sender, can_send=can_send)
+        self._requests[task] = state
+        try:
+            yield state
+        finally:
+            if state.reservation is not None:
+                state.reservation.refund()
+            if task in self._waiting:
+                self._waiting.remove(task)
+            if self._active_request is task:
+                self._active_request = None
+                self.stats.reply_active = False
+            self.stats.queue_depth = len(self._waiting)
+            self._requests.pop(task, None)
+
+    def _admit(self, sender: str) -> Reservation:
+        current = asyncio.current_task()
+        busy = ((self._active_request is not None and self._active_request is not current)
+                or (bool(self._waiting) and self._waiting[0] is not current)
+                or any(task is not current and state.reservation is not None and state.reservation.allowed
+                       for task, state in self._requests.items()))
+        reservation = Reservation(False, "busy") if busy else self.limiter.reserve(sender)
+        self._requests[asyncio.current_task()].reservation = reservation
+        return reservation
+
+    async def _wait_for_admission(self, sender: str, received_at: float) -> Reservation:
+        """Bound the waiting handler tasks, not just the number of radio sends.
+
+        Admission and FIFO ownership are synchronous between awaits. Only the
+        head may reserve tokens; commands and background posts cannot overtake it.
+        """
+        task = asyncio.current_task()
+        state = self._requests[task]
+        limit = self._admit(sender)
+        if not limit.allowed and self.cfg.queue_max_pending == 0:
+            return limit
+        if not limit.allowed:
+            if len(self._waiting) >= self.cfg.queue_max_pending:
+                self.stats.queue_full += 1
+                return Reservation(False, "queue-full")
+            deadline = received_at + self.cfg.queue_wait_s
+            self._waiting.append(task)
+            self.stats.queue_depth = len(self._waiting)
+            self.log.emit("queued", sender=sender, depth=len(self._waiting), wait_limit_s=self.cfg.queue_wait_s)
+            while True:
+                if self._clock() >= deadline:
+                    self.stats.queue_expired += 1
+                    return Reservation(False, "queue-expired")
+                if self._stopped:
+                    raise asyncio.CancelledError()
+                limit = self._admit(sender) if self._waiting[0] is task else Reservation(False, "busy")
+                if limit.allowed:
+                    self._waiting.popleft()
+                    self.stats.queue_depth = len(self._waiting)
+                    self.log.emit("dequeued", sender=sender, depth=len(self._waiting), waited_s=round(self._clock() - received_at, 3))
+                    break
+                await asyncio.sleep(min(self.queue_tick_s, max(0.0, deadline - self._clock())))
+        self._active_request = task
+        self.stats.reply_active = True
+        state.retain_on_pause = self.cfg.queue_max_pending > 0
+        return limit
+
+    def _queue_drop(self, parsed, path_len, reason: str, **extra) -> Decision:
+        decision = {"queue-full": Decision.DROP_QUEUE_FULL, "queue-expired": Decision.DROP_QUEUE_EXPIRED}.get(reason, Decision.DROP_RATE_LIMITED)
+        if decision is Decision.DROP_RATE_LIMITED:
+            self.stats.rate_limited += 1
+        return self._record(parsed, path_len, decision, reason=reason, **extra)
+
+    def _check(self, text: str, point: str) -> None:
+        verdict = self.gate.check(text)
+        if verdict.blocked:
+            self.stats.injection_blocks += 1
+            raise InjectionBlocked(verdict, point)
+
+    async def _memory_gc(self) -> None:
+        while True:
+            await asyncio.sleep(min(60.0, self.memory.max_age_s))
+            self.memory.sweep()
+            self._update_memory_stats()
 
     def _transcript_excluding_latest(self) -> str:
         entries = self.history.entries()[:-1]
@@ -421,19 +611,26 @@ class BotService:
 
     # ------------------------------------------------------------------ generation
 
-    async def _generate_fitting(self, messages: list[dict[str, str]], available: int) -> tuple[str, int, float]:
+    async def _generate_fitting(self, messages: list[dict[str, str]], available: int) -> tuple[str, int, float, bool]:
         """Call the model, sending a too-long reply back with a word budget up to shorten_retries times.
 
-        Returns (shaped text, retries used, latency in ms). The text may still exceed
-        ``available`` after the retries; the caller decides what to send then. Raises on
+        Returns (shaped text, retries used, latency in ms, token-limit truncation).
+        The text may still exceed ``available`` or be incomplete after the retries;
+        the caller uses its fixed fallback in either case. Raises on
         timeout or backend error, per call, under the configured model timeout.
         """
         cfg = self.cfg
         started = self._clock()
         retries = 0
-        raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
-        shaped = shape_reply(raw)
-        while len(shaped) > available and retries < cfg.shorten_retries:
+        async def complete():
+            raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
+            result = raw if isinstance(raw, Completion) else Completion(raw)
+            shaped = shape_reply(result.text)
+            self._check(shaped, "reply")
+            return shaped, result.truncated
+
+        shaped, truncated = await complete()
+        while (len(shaped) > available or truncated) and retries < cfg.shorten_retries:
             retries += 1
             self.stats.shorten_retries += 1
             # Models count words far better than characters: a word budget fit 5/5 tight
@@ -445,28 +642,49 @@ class BotService:
                 {
                     "role": "user",
                     "content": (
-                        f"That reply was {len(shaped)} characters and the hard limit is {available}. "
+                        ("That reply was cut off by the token limit. " if truncated else "")
+                        + f"That reply was {len(shaped)} characters and the hard limit is {available}. "
                         f"Rewrite it as one plain sentence of at most {words} words that keeps the answer. "
                         "Reply with the sentence only."
                     ),
                 },
             ]
-            raw = await asyncio.wait_for(self.backend.complete(messages), timeout=cfg.model_timeout_s)
-            shaped = shape_reply(raw)
+            self._check("\n".join(m["content"] for m in messages if m["role"] != "system"), "context")
+            shaped, truncated = await complete()
         latency_ms = round((self._clock() - started) * 1000.0, 1)
         self.stats.last_latency_ms = latency_ms
-        return shaped, retries, latency_ms
+        return shaped, retries, latency_ms, truncated
 
-    async def post_generated(self, prefix: str, request: str, fallback: str, what: str) -> str:
+    async def post_generated(self, prefix: str, request: str, fallback: str, what: str,
+                             can_send: Callable[[], bool] = lambda: True) -> str:
+        if self._stopped or len(self._requests) >= 512:
+            return "rate-limited"
+        async with self._request(self.cfg.bot_name, can_send):
+            try:
+                if not can_send():
+                    return "expired"
+                return await self._post_generated(prefix, request, fallback, what)
+            except InjectionBlocked as exc:
+                self.log.emit("injection_block", point=exc.point, what=what, score=exc.verdict.score,
+                              rules=list(exc.verdict.rules), error=exc.verdict.error)
+                return "blocked"
+            except PostExpired:
+                return "expired"
+            except TransmissionPaused:
+                return "rate-limited"
+
+    async def _post_generated(self, prefix: str, request: str, fallback: str, what: str) -> str:
         """Generate an unsolicited post in the active voice and transmit it.
 
-        Same path as a reply: limiter token first (no model call without one), the
+        Same path as a reply: injection checks, limiter reservation, the
         shortening retries, the fixed fallback if it still does not fit, the injection
         gate, the cap. Returns "sent", "rate-limited", "model-error", "blocked",
         "send-failed", or "no-room".
         """
         cfg = self.cfg
-        if not self.limiter.allow(cfg.bot_name).allowed:
+        self._check(request, "prompt")
+        self._check(request, "context")
+        if not self._admit(cfg.bot_name).allowed:
             return "rate-limited"
         available = cfg.reply_max_chars - len(prefix)
         if available <= 0:
@@ -474,7 +692,9 @@ class BotService:
         budget = max(1, int(available * 0.8))
         messages = build_messages(cfg.bot_name, budget, "", request, cfg.personas[self.active_persona], self.facts)
         try:
-            shaped, retries, latency_ms = await self._generate_fitting(messages, available)
+            shaped, retries, latency_ms, truncated = await self._generate_fitting(messages, available)
+        except InjectionBlocked:
+            raise
         except asyncio.TimeoutError:
             self.stats.model_errors += 1
             self.log.emit("post_error", what=what, error="timeout")
@@ -484,7 +704,7 @@ class BotService:
             self.log.emit("post_error", what=what, error=f"{type(exc).__name__}: {exc}")
             return "model-error"
         used_fallback = False
-        if len(shaped) > available or not shaped.strip():
+        if len(shaped) > available or not shaped.strip() or truncated:
             used_fallback = True
             self.stats.fallbacks_sent += 1
             self.log.emit("reply_too_long", what=what, length=len(shaped), limit=available, retries=retries)
@@ -494,7 +714,9 @@ class BotService:
             self.stats.injection_blocks += 1
             self.log.emit("injection_block", point=what, score=verdict.score, rules=list(verdict.rules), error=verdict.error)
             return "blocked"
-        text = (prefix + shaped)[: cfg.reply_max_chars]  # the fallback is validated to fit; model text already does
+        text = prefix + shaped
+        if len(text) > cfg.reply_max_chars:
+            return "no-room"
         if not await self._send(text):
             return "send-failed"
         self.stats.posts_sent += 1
@@ -513,6 +735,9 @@ class BotService:
             text = cfg.persona_reset_message
             decision = Decision.ANSWERED_RESET
         elif command == FORGET_COMMAND:
+            for state in self._requests.values():
+                if state.sender == parsed.sender:
+                    state.remember = False
             had = self.memory.forget(parsed.sender)
             self._update_memory_stats()
             self.log.emit("memory_forget", sender=parsed.sender, had=had)
@@ -521,15 +746,15 @@ class BotService:
         else:
             text = cfg.help_message  # help, or anything unrecognised
             decision = Decision.ANSWERED_HELP
-        limit = self.limiter.allow(parsed.sender)
-        if not limit.allowed:
-            self.stats.rate_limited += 1
-            return self._record(parsed, path_len, Decision.DROP_RATE_LIMITED, reason=limit.reason, command=command)
-        reply = compose_reply(parsed.sender, text, cfg.reply_max_chars)
+        reply = compose_reply(parsed.sender, text, cfg.reply_max_chars, max_bytes=self._reply_max_bytes)
         if reply is None:
             return self._record(parsed, path_len, Decision.DROP_EMPTY, command=command)
+        self._check(reply, "reply")
+        limit = await self._wait_for_admission(parsed.sender, received_at)
+        if not limit.allowed:
+            return self._queue_drop(parsed, path_len, limit.reason, command=command)
         held_ms = await self._hold_for_quiet_channel(received_at)
-        if await self._send(reply):
+        if await self._send(reply, mention_sender=parsed.sender):
             self.stats.replies_sent += 1
             return self._record(parsed, path_len, decision, reply=reply, held_ms=held_ms, command=command)
         return self._record(parsed, path_len, Decision.DROP_SEND_FAILED, reply=reply, command=command)
@@ -537,6 +762,8 @@ class BotService:
     def _switch_persona(self, name: str) -> None:
         """Activate a preset. The default carries no timer; anything else reverts after the timeout."""
         cfg = self.cfg
+        if self._stopped:
+            return
         previous = self.active_persona
         self.active_persona = name
         self.stats.persona = name
@@ -589,10 +816,25 @@ class BotService:
             self.log.emit("persona_timer_error", error=f"{type(exc).__name__}: {exc}")
 
     async def _announce(self, text: str, what: str, give_up_after_s: float) -> bool:
+        if self._stopped:
+            return False
+        async with self._request(self.cfg.bot_name):
+            try:
+                self._check(text, "reply")
+                return await self._announce_when_allowed(text, what, give_up_after_s)
+            except InjectionBlocked as exc:
+                self.log.emit("injection_block", point="reply", what=what, error=exc.verdict.error,
+                              score=exc.verdict.score, rules=list(exc.verdict.rules))
+                return False
+
+    async def _announce_when_allowed(self, text: str, what: str, give_up_after_s: float) -> bool:
         """Post an unsolicited line once the global limiter allows it, retrying within a window."""
         deadline = self._clock() + give_up_after_s
         while True:
-            if self.limiter.allow(self.cfg.bot_name).allowed:
+            if self._clock() > deadline or self._stopped:
+                self.log.emit("announce_failed", what=what, reason="rate-limited past the window")
+                return False
+            if self._admit(self.cfg.bot_name).allowed:
                 if await self._send(text):
                     self.stats.replies_sent += 1
                     self.log.emit("announce", what=what, text=text)
@@ -623,23 +865,57 @@ class BotService:
         return round(max(0.0, remaining) * 1000.0, 1)
 
     async def _send_apology(self, parsed, path_len, received_at: float, reason: str) -> Decision:
-        reply = compose_reply(parsed.sender, self.cfg.apology, self.cfg.reply_max_chars)
+        reply = compose_reply(parsed.sender, self.cfg.apology, self.cfg.reply_max_chars, max_bytes=self._reply_max_bytes)
         if reply is None:
             return self._record(parsed, path_len, Decision.DROP_EMPTY, model_error=reason)
         await self._hold_for_quiet_channel(received_at)
-        if await self._send(reply):
+        if await self._send(reply, mention_sender=parsed.sender):
             self.stats.apologies_sent += 1
             return self._record(parsed, path_len, Decision.APOLOGY, reply=reply, model_error=reason)
         return self._record(parsed, path_len, Decision.DROP_SEND_FAILED, reply=reply, model_error=reason)
 
-    async def _send(self, reply: str) -> bool:
-        assert len(reply) <= self.cfg.reply_max_chars
+    async def _send(self, reply: str, *, mention_sender: str | None = None) -> bool:
+        self._check(reply, "reply")
+        if self._stopped:
+            return False
+        state = self._requests[asyncio.current_task()]
+        if not state.can_send():
+            raise PostExpired()
+        if self.limiter.global_factor == 0 and not state.retain_on_pause:
+            raise TransmissionPaused()
+        while self.limiter.global_factor == 0:
+            await asyncio.sleep(self.queue_tick_s)
+            if self._stopped:
+                return False
+            if not state.can_send():
+                raise PostExpired()
+        # A held answer must pass the outbound gate at actual send time too.
+        self._check(reply, "reply")
+        if not state.reservation or not state.reservation.allowed:
+            raise RuntimeError("transmission requires a limiter reservation")
+        body = reply
+        invalid_mention = False
+        if mention_sender is not None:
+            prefix = reply_prefix(mention_sender)
+            invalid_mention = (mention_sender != state.sender or not reply.startswith(prefix)
+                               or reply_body_room(mention_sender, self.cfg.reply_max_chars, self._reply_max_bytes) <= 0)
+            body = reply[len(prefix):]
+        if (invalid_mention or any(not " " <= c <= "~" for c in body)
+                or len(reply) > self.cfg.reply_max_chars
+                or len(f"{self.cfg.bot_name}: {reply}".encode("utf-8")) > WIRE_TEXT_MAX):
+            self.log.emit("send_error", error="invalid mention, non-ASCII body, or outgoing line exceeds the wire budget")
+            self.stats.send_errors += 1
+            return False
         try:
             result = await self.mc.commands.send_chan_msg(self.cfg.channel_idx, reply)
         except Exception as exc:  # noqa: BLE001
             self.stats.send_errors += 1
             self.log.emit("send_error", error=f"{type(exc).__name__}: {exc}")
             return False
+        finally:
+            # Radio commands may wait behind other commands. Charge ambiguous or
+            # cancelled attempts too, and anchor refill after that wait.
+            state.reservation.commit()
         if result is None or result.type == EventType.ERROR:
             self.stats.send_errors += 1
             self.log.emit("send_error", error=str(getattr(result, "payload", None)))

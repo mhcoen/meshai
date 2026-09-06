@@ -39,6 +39,7 @@ class PersonMemory:
 
     def record(self, sender: str, prompt: str, reply: str) -> None:
         """Remember one answered exchange. Evicts the least recently seen person past the cap."""
+        self.sweep()
         rounds = self._people.get(sender)
         if rounds is None:
             rounds = deque(maxlen=self.rounds)
@@ -51,10 +52,11 @@ class PersonMemory:
 
     def rounds_for(self, sender: str) -> list[Round]:
         """Fresh rounds for one sender, oldest first. Stale rounds are dropped on the way."""
+        self.sweep()
         rounds = self._people.get(sender)
         if rounds is None:
             return []
-        self._expire(sender, rounds)
+        self._people.move_to_end(sender)
         return list(rounds)
 
     def forget(self, sender: str) -> bool:

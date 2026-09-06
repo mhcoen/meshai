@@ -5,8 +5,9 @@ Order of checks for an inbound message (first failure wins, every outcome is log
   2. trigger      - body must start with the configured prefix ("" = everything)
   3. length       - prompt over prompt_max_chars
   4. injection    - the prompt itself
-  5. rate limits  - global and per-sender tokens, taken once, here
-then: assemble context -> injection check on transcript+prompt -> model (hard timeout) ->
+  5. injection    - the assembled context (transcript, sender memory, prompt)
+  6. rate limits  - global and per-sender tokens, taken once, here
+then: model (hard timeout) ->
 injection check on the reply -> shape -> cap -> send. A model timeout or error sends the
 fixed apology on the tokens already taken. An injection block anywhere sends nothing.
 """
@@ -315,13 +316,8 @@ class BotService:
             )
         prompt = verdict.text  # sanitized form when that mode is on
 
-        # 5. Rate limits, taken once for whatever we end up sending.
-        limit = self.limiter.allow(parsed.sender)
-        if not limit.allowed:
-            self.stats.rate_limited += 1
-            return self._record(parsed, path_len, Decision.DROP_RATE_LIMITED, reason=limit.reason)
-
-        # Context. The triggering line is already the newest history entry; exclude it.
+        # 5. Context, checked before any token is spent so a blocked message costs nothing.
+        # The triggering line is already the newest history entry; exclude it.
         transcript = self._transcript_excluding_latest()
         memory_block = render_rounds(self.memory.rounds_for(parsed.sender), cfg.person_memory_max_chars)
         context_verdict = self.gate.check("\n".join(part for part in (transcript, memory_block, prompt) if part))
@@ -336,6 +332,12 @@ class BotService:
                 injection_rules=list(context_verdict.rules),
                 injection_error=context_verdict.error,
             )
+
+        # 6. Rate limits, taken once for whatever we end up sending.
+        limit = self.limiter.allow(parsed.sender)
+        if not limit.allowed:
+            self.stats.rate_limited += 1
+            return self._record(parsed, path_len, Decision.DROP_RATE_LIMITED, reason=limit.reason)
 
         prefix_len = len(f"@[{parsed.sender}] ")
         # Models overshoot a stated character budget by 10 to 20 percent, so state 80 percent of
@@ -359,6 +361,9 @@ class BotService:
         except Exception as exc:  # noqa: BLE001
             self.stats.model_errors += 1
             return await self._send_apology(parsed, path_len, received_at, reason=f"{type(exc).__name__}: {exc}")
+        if not shaped.strip():
+            self.stats.model_errors += 1
+            return await self._send_apology(parsed, path_len, received_at, reason="empty reply")
 
         # Outbound.
         if len(shaped) > available:
@@ -479,7 +484,7 @@ class BotService:
             self.log.emit("post_error", what=what, error=f"{type(exc).__name__}: {exc}")
             return "model-error"
         used_fallback = False
-        if len(shaped) > available:
+        if len(shaped) > available or not shaped.strip():
             used_fallback = True
             self.stats.fallbacks_sent += 1
             self.log.emit("reply_too_long", what=what, length=len(shaped), limit=available, retries=retries)

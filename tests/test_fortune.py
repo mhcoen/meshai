@@ -124,6 +124,14 @@ async def test_fire_uses_the_fortune_fallback_when_the_model_will_not_fit(harnes
     assert len(h.backend.calls) == 1 + h.cfg.shorten_retries
 
 
+async def test_an_empty_fortune_uses_the_fallback_never_a_bare_prefix(harness):
+    h = harness(backend=FakeBackend(reply=""), global_burst=5)
+    wall = Clock(at(2026, 9, 4, 6, 3))
+    s, records = make_scheduler(h, wall)
+    assert await s.fire(wall()) is True
+    assert h.sent[-1] == (1, "Fortune: Fallback fortune.")
+
+
 async def test_fire_defers_while_rate_limited_and_posts_when_a_token_returns(harness, clock):
     h = harness()
     assert await h.say("Alice: q") is not None  # spend the only token

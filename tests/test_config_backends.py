@@ -64,6 +64,8 @@ def test_missing_port_is_rejected():
         {"tx_duty_budget": 0},
         {"tx_duty_budget": 0.9},
         {"default_persona": "nope"},
+        {"bot_name": "Mesh:AI"},
+        {"apology": "x" * 140},
         {"personas": {"Bad Name": "x"}},
         {"personas": {"help": "x"}, "default_persona": "help"},
         {"persona_timeout_min": 0},

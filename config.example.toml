@@ -17,6 +17,7 @@ reply_delay_s = 8.0               # hold the reply this long (jittered) after th
 shorten_retries = 2               # times a too-long reply goes back to the model with the exact limit
 too_long_reply = "That answer will not fit in one message, ask me something narrower."   # sent if it still will not fit
 apology = "Sorry, I couldn't answer that one."
+facts = ""                        # local facts for the model, e.g. where the mesh is and what its repeaters are called
 default_persona = "funny"       # which entry of [personas] is active at start and after a reset
 persona_timeout_min = 120         # a switched personality reverts to the default after this long
 persona_reset_message = "Back to the default personality."   # posted when it reverts

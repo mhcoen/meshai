@@ -1,0 +1,44 @@
+# Short paraphrases, not copied documentation. Source links are never fetched at runtime.
+# Operator local facts belong in config.toml's facts, not in this general corpus.
+
+[[reference]]
+title = "Spreading factor and airtime"
+keywords = ["spreading factor", "sf", "sf5", "sf6", "sf7", "sf8", "sf9", "sf10", "sf11", "sf12", "airtime"]
+text = "At fixed bandwidth, increasing spreading factor lengthens symbols and improves weak-signal reception at the expense of speed. One SF step doubles symbol duration; total packet airtime also depends on payload and coding. Better sensitivity does not guarantee a particular distance."
+source = "https://www.mouser.com/pdfdocs/semtech-lora-modem-design.pdf"
+reviewed = "2026-09-06"
+
+[[reference]]
+title = "Bandwidth tradeoff"
+keywords = ["bandwidth", "bw", "bw62", "bw125", "bw250", "khz", "narrow bandwidth", "wide bandwidth"]
+text = "At fixed spreading factor, halving bandwidth doubles symbol duration and reduces data rate. Narrower bandwidth improves sensitivity, trading speed for weak-signal reception. Incompatible frequency, bandwidth, or spreading factor can prevent radios receiving each other; changing one radio can disconnect it from the mesh."
+source = "https://www.mouser.com/pdfdocs/semtech-lora-modem-design.pdf"
+reviewed = "2026-09-07"
+
+[[reference]]
+title = "Coding rate and error correction"
+keywords = ["coding rate", "code rate", "cr", "cr5", "cr6", "cr7", "cr8", "4/5", "4/6", "4/7", "4/8", "error correction", "fec"]
+text = "MeshCore CR values 5 to 8 mean 4/5 to 4/8. On this mesh, higher CR means more error correction: 4/8 carries the most redundancy and costs the most airtime, while 4/5 has the least overhead. More correction can help with corrupted data but cannot guarantee delivery through interference."
+source = "https://www.mouser.com/pdfdocs/semtech-lora-modem-design.pdf"
+reviewed = "2026-09-07"
+
+[[reference]]
+title = "MeshCore channels and direct paths"
+keywords = ["private channel", "private channels", "public channel", "public channels", "group channel", "group channels", "channel messages", "flood routing", "mesh routing", "mesh route", "mesh routes", "hop count", "direct message", "direct messages", "dm", "repeaters", "repeater"]
+text = "Public and private group channels use flooding, subject to repeater forwarding policies. Direct messages can use learned paths. Ordinary companion clients do not relay other users' traffic; repeaters do. A private channel does not imply a private route."
+source = "https://github.com/meshcore-dev/MeshCore/blob/main/docs/faq.md#5-general"
+reviewed = "2026-09-07"
+
+[[reference]]
+title = "Signal strength versus signal quality"
+keywords = ["rssi", "snr", "dbm", "noise floor", "radio noise", "signal strength", "signal quality", "antenna", "cable loss"]
+text = "RSSI measures received signal strength in dBm; -90 dBm is stronger than -110 dBm. SNR compares signal to noise in dB. LoRa can decode below the noise floor within modem limits. Antenna gain, path loss, and cable losses affect received strength; RSSI alone does not determine link quality."
+source = "https://www.thethingsnetwork.org/docs/lorawan/rssi-and-snr/"
+reviewed = "2026-09-07"
+
+[[reference]]
+title = "Channels versus room servers"
+keywords = ["room server", "room servers", "meshcore room", "meshcore rooms", "channel history", "missed channel messages", "bbs"]
+text = "A room server stores posts for later retrieval. Group channels do not provide that mailbox: a receiver that misses a transmission cannot assume the channel will deliver it later."
+source = "https://github.com/meshcore-dev/MeshCore/blob/main/docs/faq.md#125-room-server"
+reviewed = "2026-09-07"

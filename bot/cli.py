@@ -19,6 +19,7 @@ from bot.config import Config, ConfigError, load_config
 from bot.guard import InjectionGate
 from bot.history import History
 from bot.jsonlog import EventLog
+from bot.knowledge import Reference, checked_references
 from bot.logcheck import check_log
 from bot.ratelimit import RateLimiter
 from bot.service import BotService, ChannelError
@@ -46,7 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
+def build_service(cfg: Config, meshcore, log: EventLog, references: tuple[Reference, ...] | None = None) -> BotService:
+    if references is None:
+        references = checked_references(InjectionGate(cfg.injection_threshold))
     limiter = RateLimiter(
         global_per_min=cfg.global_rate_per_min,
         global_burst=cfg.global_burst,
@@ -74,6 +77,7 @@ def build_service(cfg: Config, meshcore, log: EventLog) -> BotService:
         history=History(cfg.history_size),
         log=log,
         monitor=monitor,
+        references=references,
     )
     if cfg.fortune_enabled:
         service.fortune = FortuneScheduler(
@@ -157,7 +161,7 @@ async def connect(cfg: Config, attempts: int = 3, boot_delay_s: float = 2.5):
             await disconnect(meshcore)
 
 
-async def run(cfg: Config, headless: bool, log: EventLog) -> int:
+async def run(cfg: Config, headless: bool, log: EventLog, references: tuple[Reference, ...] | None = None) -> int:
     """Handle signals even during port opening and the boot delay."""
     loop = asyncio.get_running_loop()
     owner = asyncio.current_task()
@@ -172,7 +176,7 @@ async def run(cfg: Config, headless: bool, log: EventLog) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, request_stop)
     try:
-        return await _run(cfg, headless, log)
+        return await _run(cfg, headless, log, references)
     except asyncio.CancelledError:
         if signalled:
             return 0
@@ -182,7 +186,13 @@ async def run(cfg: Config, headless: bool, log: EventLog) -> int:
             loop.remove_signal_handler(sig)
 
 
-async def _run(cfg: Config, headless: bool, log: EventLog) -> int:
+async def _run(cfg: Config, headless: bool, log: EventLog, references: tuple[Reference, ...] | None = None) -> int:
+    if references is None:
+        try:
+            references = checked_references(InjectionGate(cfg.injection_threshold))
+        except (ValueError, OSError) as exc:
+            print(f"config error: radio references: {exc}", file=sys.stderr)
+            return 1
     try:
         meshcore = await connect(cfg)
     except ConnectError as exc:
@@ -197,7 +207,7 @@ async def _run(cfg: Config, headless: bool, log: EventLog) -> int:
         return 2
     service = None
     try:
-        service = build_service(cfg, meshcore, log)
+        service = build_service(cfg, meshcore, log, references)
         return await _run_connected(cfg, service, headless, log)
     finally:
         if service is not None:
@@ -272,6 +282,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return 1
+    try:
+        references = checked_references(InjectionGate(cfg.injection_threshold))
+    except (ValueError, OSError) as exc:
+        print(f"config error: radio references: {exc}", file=sys.stderr)
+        return 1
     log_path = args.log_file if args.log_file is not None else (cfg.log_file or None)
     if log_path is None and not args.headless:
         log_path = "meshai.jsonl"  # the TUI owns the terminal, so stderr is not a usable log target
@@ -289,7 +304,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         root.addHandler(handler)
     log = EventLog(path=log_path)
     try:
-        return asyncio.run(run(cfg, headless=args.headless, log=log))
+        return asyncio.run(run(cfg, headless=args.headless, log=log, references=references))
     finally:
         log.close()
 

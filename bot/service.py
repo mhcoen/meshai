@@ -30,13 +30,15 @@ from meshcore import EventType
 from bot import __version__
 from bot.backends import Backend, Completion
 from bot.config import Config, WIRE_TEXT_MAX
+from bot.context import conversation_context
 from bot.guard import InjectionGate, Verdict
-from bot.history import History, HistoryEntry, render_transcript
+from bot.history import History, HistoryEntry
 from bot.jsonlog import EventLog
-from bot.memory import PersonMemory, render_rounds
+from bot.knowledge import Reference, checked_references, select_references
+from bot.memory import PersonMemory
 from bot.parse import extract_prompt, parse_channel_text
 from bot.personas import FORGET_COMMAND, LORA_FACTS, RESET_COMMAND, parse_command, radio_facts
-from bot.prompt import build_messages
+from bot.prompt import build_messages, build_user_message
 from bot.ratelimit import RateLimiter, Reservation
 from bot.reply import compose_reply, shape_reply, reply_prefix, reply_body_room, plain_ascii
 from bot.lifecycle import close_step, disconnect
@@ -132,6 +134,7 @@ class BotService:
         clock: Callable[[], float] = time.monotonic,
         monitor: Any = None,
         fortune: Any = None,
+        references: tuple[Reference, ...] | None = None,
     ):
         self.cfg = cfg
         self._reply_max_bytes = WIRE_TEXT_MAX - len(f"{cfg.bot_name}: ".encode("utf-8"))
@@ -140,6 +143,8 @@ class BotService:
         self.gate = gate
         self.limiter = limiter
         self.history = history
+        # CLI supplies the immutable corpus it checked before connecting.
+        self.references = checked_references(gate) if references is None else references
         self.log = log
         self.monitor = monitor  # optional UtilizationMonitor; started/stopped with the service
         self.fortune = fortune  # optional FortuneScheduler; started/stopped with the service
@@ -427,9 +432,13 @@ class BotService:
 
         # 5. Context, checked before any token is spent so a blocked message costs nothing.
         # The triggering line is already the newest history entry; exclude it.
-        transcript = self._transcript_excluding_latest()
-        memory_block = render_rounds(self.memory.rounds_for(parsed.sender), cfg.person_memory_max_chars)
-        context_verdict = self.gate.check("\n".join(part for part in (transcript, memory_block, prompt) if part))
+        entries = self.history.entries()[:-1]
+        transcript, memory_block = conversation_context(
+            entries, self.memory.rounds_for(parsed.sender), parsed.sender, cfg.bot_name,
+            cfg.transcript_max_chars, cfg.person_memory_max_chars,
+        )
+        reference = select_references(prompt, self.references)
+        context_verdict = self.gate.check(build_user_message(transcript, prompt, memory_block, reference))
         if context_verdict.blocked:
             self.stats.injection_blocks += 1
             return self._record(
@@ -451,13 +460,17 @@ class BotService:
         if not limit.allowed:
             return self._queue_drop(parsed, path_len, limit.reason)
         state = self._requests[asyncio.current_task()]
-        memory_block = render_rounds(self.memory.rounds_for(parsed.sender), cfg.person_memory_max_chars) if state.remember else ""
-        self._check("\n".join(part for part in (transcript, memory_block, prompt) if part), "context")
+        transcript, memory_block = conversation_context(
+            entries, self.memory.rounds_for(parsed.sender) if state.remember else [],
+            parsed.sender, cfg.bot_name, cfg.transcript_max_chars, cfg.person_memory_max_chars,
+        )
+        self._check(build_user_message(transcript, prompt, memory_block, reference), "context")
         # Models overshoot a stated character budget by 10 to 20 percent, so state 80 percent of
         # the real room; the hard cap in compose_reply still enforces the true limit.
         budget = max(1, int(available * 0.8))
         messages = build_messages(
-            cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona], self.facts, memory_block
+            cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona], self.facts, memory_block,
+            reference,
         )
 
         # Model, under a hard timeout per call. A reply that does not fit goes back to the
@@ -507,7 +520,7 @@ class BotService:
         if await self._send(reply, mention_sender=parsed.sender):
             self.stats.replies_sent += 1
             if not fallback and self._requests[asyncio.current_task()].remember:
-                self.memory.record(parsed.sender, prompt, shaped)
+                self.memory.record(parsed.sender, prompt, shaped, source_prompt=parsed.body)
                 self._update_memory_stats()
             return self._record(
                 parsed, path_len, decision, reply=reply, latency_ms=latency_ms, held_ms=held_ms, retries=retries
@@ -599,11 +612,6 @@ class BotService:
             self.memory.sweep()
             self._update_memory_stats()
 
-    def _transcript_excluding_latest(self) -> str:
-        entries = self.history.entries()[:-1]
-        lines = [e.line() for e in entries if not e.flagged]
-        return render_transcript(lines, self.cfg.transcript_max_chars)
-
     # ------------------------------------------------------------------ memory
 
     def _update_memory_stats(self) -> None:
@@ -614,7 +622,12 @@ class BotService:
 
     def _compose_facts(self, info: dict) -> str:
         """Built-in LoRa facts, the radio's own settings, then whatever the config adds."""
-        return " ".join(part for part in (LORA_FACTS, radio_facts(info), self.cfg.facts.strip()) if part)
+        parts = [f"General LoRa and MeshCore facts: {LORA_FACTS}"]
+        if settings := radio_facts(info):
+            parts.append(f"Companion settings at startup: {settings}")
+        if local := self.cfg.facts.strip():
+            parts.append(f"Local notes from the operator: {local}")
+        return " ".join(parts)
 
     # ------------------------------------------------------------------ generation
 

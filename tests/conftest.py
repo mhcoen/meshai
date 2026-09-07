@@ -15,6 +15,7 @@ from bot.config import Config, config_from_mapping
 from bot.guard import InjectionGate
 from bot.history import History
 from bot.jsonlog import EventLog
+from bot.knowledge import load_references
 from bot.ratelimit import RateLimiter
 from bot.service import BotService
 
@@ -174,6 +175,9 @@ class Harness:
             history=self.history,
             log=self.log,
             clock=clock,
+            # Runtime detector fakes must not participate in CLI preflight.
+            # Corpus startup validation has dedicated tests.
+            references=load_references(),
         )
 
     @property

@@ -234,7 +234,9 @@ async def test_ingestion_snapshot_and_memory_refresh_after_waiting(queued, clock
     user = backend.calls[1][1]["content"]
     transcript = user.split(HISTORY_BEGIN)[1].split(HISTORY_END)[0]
     memory = user.split(MEMORY_BEGIN)[1].split(MEMORY_END)[0]
-    assert "first question" in transcript
+    # The earlier question now lives only in refreshed personal memory.
+    assert "first question" not in transcript
+    assert user.count("first question") == 1
     assert "followup question" not in transcript and "later question" not in transcript
     assert "first question" in memory and "Four." in memory
     await h.service.stop()

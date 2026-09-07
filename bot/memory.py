@@ -19,6 +19,7 @@ class Round:
     at: float
     prompt: str
     reply: str
+    source_prompt: str | None = None  # original channel body, before trigger/sanitization
 
 
 class PersonMemory:
@@ -37,7 +38,7 @@ class PersonMemory:
         self._clock = clock
         self._people: OrderedDict[str, deque[Round]] = OrderedDict()
 
-    def record(self, sender: str, prompt: str, reply: str) -> None:
+    def record(self, sender: str, prompt: str, reply: str, *, source_prompt: str | None = None) -> None:
         """Remember one answered exchange. Evicts the least recently seen person past the cap."""
         self.sweep()
         rounds = self._people.get(sender)
@@ -46,7 +47,7 @@ class PersonMemory:
             self._people[sender] = rounds
         else:
             self._people.move_to_end(sender)
-        rounds.append(Round(self._clock(), prompt, reply))
+        rounds.append(Round(self._clock(), prompt, reply, source_prompt))
         while len(self._people) > self.max_people:
             self._people.popitem(last=False)
 
@@ -88,7 +89,17 @@ class PersonMemory:
 
 def render_rounds(rounds: list[Round], max_chars: int) -> str:
     """'asked: ...' / 'replied: ...' pairs, oldest first, trimmed from the oldest end to fit."""
-    lines = [f"asked: {r.prompt}\nreplied: {r.reply}" for r in rounds]
-    while lines and len("\n".join(lines)) > max_chars:
-        lines.pop(0)
-    return "\n".join(lines)
+    return "\n".join(_round_text(r) for r in fitting_rounds(rounds, max_chars))
+
+
+def _round_text(r: Round) -> str:
+    return f"asked: {r.prompt}\nreplied: {r.reply}"
+
+
+def fitting_rounds(rounds: list[Round], max_chars: int) -> list[Round]:
+    """Select complete rounds before using them to deduplicate channel context."""
+    kept = list(rounds)
+    total = sum(len(_round_text(r)) + 1 for r in kept) - 1
+    while kept and total > max_chars:
+        total -= len(_round_text(kept.pop(0))) + 1
+    return kept

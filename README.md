@@ -39,10 +39,12 @@ channel utilisation, and every message with the bot's decision on it:
 - Answers every message on one MeshCore channel. On a shared channel, an
   optional trigger prefix such as `!ai` limits it to messages meant for it
 - Per-person memory of recent exchanges, so follow-up questions make sense.
-  `/forget` wipes your history
+  Overlapping exchanges appear only once in model context; `/forget` clears
+  your personal memory, not the shared channel history
 - Talks LoRa, not information theory. It knows the mesh's settings and what
   each one trades off, reads its own frequency, bandwidth, and power from the
-  radio at startup, and gives practical answers about radio settings
+  radio at startup, and selects relevant passages from a small
+  [sourced, offline radio reference](docs/context-and-knowledge.md)
 - Local model through Ollama, or any OpenAI compatible chat endpoint
 - Named personalities, switched from the channel: `/funny`, `/snarky`,
   `/marvin`, `/pirate`, `/haiku`, with `/help` and `/reset`. A switch reverts
@@ -325,7 +327,7 @@ After a successful start, the bot announces its name, package version, configure
 LLM, and repository link in one message, for example:
 
 ```text
-MeshAI v1.2.0, LLM: qwen3:30b-a3b-instruct-2507-q4_K_M, https://github.com/mhcoen/meshai
+MeshAI v1.3.0, LLM: qwen3:30b-a3b-instruct-2507-q4_K_M, https://github.com/mhcoen/meshai
 ```
 
 The package version is also available locally with `meshai --version`.
@@ -369,9 +371,11 @@ part is whatever the sending node put there; nothing verifies it.
    rendered as `Sender: text`, trimmed from the oldest end to
    `transcript_max_chars`, and placed in one user message after the current
    prompt, between markers that label them as untrusted. History is never
-   replayed as earlier chat turns.
+   replayed as earlier chat turns. Exchanges included in personal memory are
+   omitted from the channel block before trimming. Relevant local radio
+   reference passages go in a separate, bounded background block.
 7. **Injection check, context.** The transcript, the sender's remembered
-   exchanges, and the prompt together, so fragments that pass one at a time
+   exchanges, selected radio references, and the prompt together, so fragments that pass one at a time
    but add up to an instruction are caught here. This runs before any rate-limit token is
    spent, so a message blocked here costs the bot nothing.
 8. **Queue and rate limits.** One active answer and up to `queue_max_pending`
@@ -380,7 +384,8 @@ part is whatever the sending node put there; nothing verifies it.
    queue rejects new arrivals, preserving those already waiting. The head waits
    for both global and per-sender tokens; congestion never speeds up draining.
    Once admitted, memory is refreshed and context checked again; the transcript
-   remains the ingestion snapshot. Tokens are reserved, committed on a send
+   still uses the ingestion snapshot, with overlap removed against the refreshed
+   memory. Tokens are reserved, committed on a send
    attempt, and refunded on injection blocks or other unsent outcomes. Refill
    timing is anchored to transmission, so slow generation cannot bunch replies.
 9. **Model.** One call under a hard timeout of `model_timeout_s`. On a
@@ -577,13 +582,15 @@ Sender names are not authenticated, so this is continuity for a
 conversation, not identity: anyone can claim a name and inherit its
 context.
 
-Why the model input is ordered prompt, then the sender's memory, then the
-channel history: the history is the most hostile block, since anyone in
+Why the model input is ordered prompt, selected radio references, the sender's
+memory, then channel history: the history is the most hostile block, since anyone in
 range wrote it, and the model was measured to follow planted instructions
 far less when that block comes last. The memory block holds only prompts
 that passed the injection gate and were answered, plus the bot's own
 replies, so it is nearer to trusted and sits next to the question, where a
-follow-up needs it. The injection check runs over all three together.
+follow-up needs it. The injection check runs over the complete user message,
+including reference passages. Overlapping exchanges are included only once;
+see [Context and radio knowledge](docs/context-and-knowledge.md) for the details.
 
 ### The daily fortune
 

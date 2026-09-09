@@ -100,7 +100,7 @@ Just send a message to chat; no command is needed. With the default presets:
 | `/haiku` | Answers as a one-line haiku |
 | `/reset` | Restores the default personality immediately |
 | `/forget` | Clears the bot's personal memory of you, not shared channel history |
-| `/roll` | Rolls two six-sided dice; `/roll 3 8` or `/roll 3,8` rolls three eight-sided dice |
+| `/roll` | Rolls two six-sided dice by default; accepts a dice count and sides per die, e.g. `/roll 3 8` or `/roll 3,8` |
 | `/magic8` | Gives a random Magic 8 Ball answer; an optional yes/no question can follow |
 
 Personality switches are silent, affect the whole channel, and revert after
@@ -572,8 +572,9 @@ automatically, with no extra command needed. Congestion can delay it, and if
 it cannot get a token within `queue_wait_s` after page one, it is skipped.
 On a shared channel with a trigger prefix, commands go after it: `!ai /help`.
 
-`/roll` rolls two six-sided dice by default. Use `/roll 3 8` or `/roll 3,8`
-to roll three eight-sided dice. The reply shows only the individual values,
+`/roll` rolls two six-sided dice by default. Supply the number of dice and
+sides per die, separated by a space or comma. For example, `/roll 3 8` or
+`/roll 3,8` rolls three eight-sided dice. The reply shows only the individual values,
 for example `@[Andy] Rolled 3, 8, 2.`, with no total. Counts are bounded to
 1-20 dice and 1-1000 sides per die, and the complete reply must fit one radio
 message. Rolls run locally without the model and use the usual injection

@@ -1,6 +1,6 @@
 """Per-person memory: the last few answered exchanges with each sender name.
 
-In memory only; a restart clears it. Sender names are unauthenticated, so this is
+Snapshots can be backed by SQLite. Sender names are unauthenticated, so this is
 continuity for a conversation, not identity. Garbage collection has three parts:
 a cap on rounds per person, an age limit on rounds, and a cap on the number of
 people, least recently seen out first.
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 
@@ -62,6 +62,22 @@ class PersonMemory:
 
     def forget(self, sender: str) -> bool:
         return self._people.pop(sender, None) is not None
+
+    def snapshot(self) -> list[tuple[str, list[Round]]]:
+        """Oldest-used people first, without changing LRU order."""
+        self.sweep()
+        return [(sender, list(rounds)) for sender, rounds in self._people.items()]
+
+    def restore(self, people: Iterable[tuple[str, list[Round]]]) -> None:
+        """Restore original timestamps and LRU order, enforcing current bounds."""
+        self._people.clear()
+        now = self._clock()
+        for sender, rounds in people:
+            fresh = [r for r in rounds if now - self.max_age_s <= r.at <= now]
+            if fresh:
+                self._people[sender] = deque(fresh, maxlen=self.rounds)
+        while len(self._people) > self.max_people:
+            self._people.popitem(last=False)
 
     def sweep(self) -> int:
         """Drop stale rounds everywhere and people with none left. Returns people removed."""

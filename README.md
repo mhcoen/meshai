@@ -1,14 +1,5 @@
 # Mesh Potato
 
-Formerly MeshAI. The repository is now [mhcoen/meshpotato](https://github.com/mhcoen/meshpotato).
-The command is now `meshpotato`; `meshai` and `MESHAI_*` environment variables
-remain compatible aliases. `MESHPOTATO_*` takes precedence when both are set.
-When upgrading, reinstall the package to add the new command, set both the
-companion radio's node name and `bot_name` to `Mesh Potato`, and set
-`reply_max_chars = 147` before restarting. Startup refuses a missing or mismatched
-radio node name, protecting both the packet budget and the own-name loop guard.
-Existing screenshots show the old name.
-
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](#development)
@@ -20,8 +11,8 @@ posts a one sentence reply back to the channel as `@[sender] answer`. Every
 message and every reply passes a built-in prompt injection detector before it
 can reach the model or the radio.
 
-It is a small Python package with no web interface, no database, and no
-history on disk.
+It is a small Python package with no web interface or database server.
+A local SQLite file keeps recent conversations across restarts.
 
 A live instance runs on the `#ai` channel of the MeshCore mesh in
 southern Wisconsin, centered on Madison. If you are on that mesh, add `#ai`
@@ -32,14 +23,9 @@ queue, so a delayed answer can mean congestion rather than a fault.
 
 ## Screenshots
 
-What people on the channel see, in the MeshCore app on your phone:
-
-<p align="center">
-  <img src="docs/phone.png" width="340" alt="The #ai channel in the MeshCore app: two people talking and Mesh Potato answering each of them, its replies highlighted">
-</p>
-
 What you see, in the terminal monitor: radio and channel state, rate limits,
-channel utilisation, and every message with the bot's decision on it:
+channel utilisation, and every message with the bot's decision on it
+(current UI with sample traffic):
 
 ![The Mesh Potato terminal monitor](docs/tui.svg)
 
@@ -47,7 +33,7 @@ channel utilisation, and every message with the bot's decision on it:
 
 - Answers every message on one MeshCore channel. On a shared channel, an
   optional trigger prefix such as `!ai` limits it to messages meant for it
-- Per-person memory of recent exchanges, so follow-up questions make sense.
+- Per-person memory of recent exchanges, preserved across restarts so follow-up questions make sense.
   Overlapping exchanges appear only once in model context; `/forget` clears
   your personal memory, not the shared channel history
 - Talks LoRa, not information theory. It knows the mesh's settings and what
@@ -70,8 +56,8 @@ channel utilisation, and every message with the bot's decision on it:
 
 ## Also
 
-- One sentence ASCII answers, capped at 147 characters including the
-  mention and checked against the radio's byte limit; sender names are
+- One sentence ASCII answers, automatically sized to fit the radio's
+  160-byte limit including the node name and mention; sender names are
   mentioned exactly as sent
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
 - Rate limits, global and per sender, as a burst floor; up to ten waiting
@@ -629,7 +615,14 @@ held at once, least recently seen out first, which is also what stops a
 name-rotating flood from filling it. Expired entries are swept on access and
 at least once a minute while the bot is running. `/forget` wipes the bot's
 memory of the sender and prevents older in-flight requests from repopulating
-it. Everything is in memory only and a restart clears it.
+it, including saved personal memory. Shared channel history is separate and
+is not erased by `/forget`.
+
+Recent conversations survive restarts in `meshpotato.sqlite3`, a local SQLite
+file with no database server to install. Channel history keeps at most 20
+lines and expires after one hour; personal memory keeps the limits above.
+See [Conversation storage](docs/storage.md) for save timing, configuration,
+and database maintenance.
 
 Sender names are not authenticated, so this is continuity for a
 conversation, not identity: anyone can claim a name and inherit its
@@ -671,7 +664,8 @@ Jitter and the retry cutoff are capped before midnight. A send failure ends
 the day's attempt because a missing acknowledgement may hide a successful
 transmission. The scheduler remembers consumed days while running and skips
 today after a restart in the repeated autumn DST hour. Without persistent
-state, arbitrary clock rollback across a restart cannot be deduplicated.
+fortune bookkeeping, arbitrary clock rollback across a restart cannot be
+deduplicated; the conversation database does not store fortune schedules.
 The monitor shows the next slot and the counts.
 
 ## Security
@@ -811,6 +805,7 @@ bot/
   ratelimit.py    token buckets
   utilization.py  channel load monitor
   history.py      bounded channel history
+  storage.py      SQLite conversation snapshots
   jsonlog.py      JSON lines log
   tui.py          Textual monitor
 tests/

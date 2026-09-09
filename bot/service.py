@@ -16,6 +16,8 @@ pause before transmission retains an active answer until transmission is allowed
 from __future__ import annotations
 
 import asyncio
+import json
+import hashlib
 import random
 import time
 from collections import deque
@@ -45,6 +47,7 @@ from bot.ratelimit import RateLimiter, Reservation
 from bot.reception import reception_context
 from bot.reply import compose_reply, shape_reply, reply_prefix, reply_body_room, plain_ascii
 from bot.lifecycle import close_step, disconnect
+from bot.storage import StateError, StateStore
 
 
 class Decision(str, Enum):
@@ -66,6 +69,7 @@ class Decision(str, Enum):
     DROP_QUEUE_EXPIRED = "dropped:queue-expired"
     DROP_EMPTY = "dropped:empty-reply"
     DROP_SEND_FAILED = "dropped:send-failed"
+    DROP_STATE_FAILED = "dropped:state-failed"
     IGNORED_OTHER_CHANNEL = "ignored:other-channel"
 
 
@@ -140,6 +144,7 @@ class BotService:
         monitor: Any = None,
         fortune: Any = None,
         references: tuple[Reference, ...] | None = None,
+        wall_clock: Callable[[], float] = time.time,
     ):
         self.cfg = cfg
         self._reply_max_bytes = WIRE_TEXT_MAX - len(f"{cfg.bot_name}: ".encode("utf-8"))
@@ -148,6 +153,8 @@ class BotService:
         self.gate = gate
         self.limiter = limiter
         self.history = history
+        self.history.max_age_s = cfg.history_max_age_s
+        self.history._clock = wall_clock
         # CLI supplies the immutable corpus it checked before connecting.
         self.references = checked_references(gate) if references is None else references
         self.log = log
@@ -163,7 +170,7 @@ class BotService:
             rounds=cfg.person_memory_rounds,
             max_age_s=cfg.person_memory_days * 86400.0,
             max_people=cfg.person_memory_people,
-            clock=clock,
+            clock=wall_clock if cfg.state_db else clock,
         )
         self.facts = self._compose_facts({})
         self._channel_hash: str | None = None
@@ -180,6 +187,8 @@ class BotService:
         self._memory_task: asyncio.Task | None = None
         self._startup_announcement_task: asyncio.Task | None = None
         self._started = False
+        self._state_store: StateStore | None = None
+        self._state_task: asyncio.Task | None = None
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -219,6 +228,24 @@ class BotService:
         self.stats.channel_name = name
         self._channel_hash = (result.payload or {}).get("channel_hash")
         self.facts = self._compose_facts(getattr(self.mc, "self_info", None) or {})
+        if self.cfg.state_db:
+            store = None
+            try:
+                secret = (result.payload or {}).get("channel_secret")
+                channel_id = (hashlib.sha256(bytes(secret)).hexdigest()
+                              if isinstance(secret, (bytes, bytearray)) else self._channel_hash)
+                scope = json.dumps([self.cfg.bot_name, self.cfg.channel_idx, name, channel_id], default=str)
+                store = StateStore(self.cfg.state_db, scope)
+                store.load(self.history, self.memory, self.gate)
+                store.save(self.history, self.memory)  # prune stale, flagged, and over-cap rows on disk too
+            except StateError as exc:
+                if store is not None:
+                    store.close()
+                raise ChannelError(f"conversation database: {exc}") from exc
+            self._state_store = store
+            self._update_memory_stats()
+            self.log.emit("state_restored", history=len(self.history), people=self.memory.people,
+                          rounds=self.memory.total_rounds)
         self.stats.connected = bool(getattr(self.mc, "is_connected", True))
         self.log.emit(
             "startup",
@@ -251,6 +278,8 @@ class BotService:
         if self.fortune is not None:
             self.fortune.start()
         self._memory_task = asyncio.create_task(self._memory_gc(), name="memory-gc")
+        if self._state_store is not None:
+            self._state_task = asyncio.create_task(self._save_state_periodically(), name="state-save")
         self._startup_announcement_task = asyncio.create_task(
             self._announce_startup(), name="startup-announcement"
         )
@@ -293,13 +322,15 @@ class BotService:
                 pass
         self._subs.clear()
         tasks = set(self._requests)
-        tasks.update(task for task in (self._start_task, self._memory_task, self._startup_announcement_task) if task is not None)
+        tasks.update(task for task in (self._start_task, self._memory_task, self._startup_announcement_task,
+                                      self._state_task) if task is not None)
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._memory_task = None
         self._startup_announcement_task = None
+        self._state_task = None
         await self._cancel_persona_timer()
         for worker in (self.fortune, self.monitor):
             if worker is not None:
@@ -307,6 +338,13 @@ class BotService:
         await close_step(self.mc.stop_auto_message_fetching, self.shutdown_timeout_s, self.log)
         await disconnect(self.mc, self.shutdown_timeout_s, self.log)
         await close_step(self.backend.aclose, self.shutdown_timeout_s, self.log)
+        if self._state_store is not None:
+            self._save_state()
+            try:
+                self._state_store.close()
+            except Exception as exc:  # shutdown must still complete on disk errors
+                self.log.emit("state_error", error=str(exc))
+            self._state_store = None
         self.stats.connected = False
         self.log.emit("shutdown", replies_sent=self.stats.replies_sent)
 
@@ -633,6 +671,21 @@ class BotService:
             self.memory.sweep()
             self._update_memory_stats()
 
+    def _save_state(self) -> bool:
+        if self._state_store is None:
+            return True
+        try:
+            self._state_store.save(self.history, self.memory)
+            return True
+        except StateError as exc:
+            self.log.emit("state_error", error=str(exc))
+            return False
+
+    async def _save_state_periodically(self) -> None:
+        while True:
+            await asyncio.sleep(self.cfg.state_save_interval_s)
+            self._save_state()
+
     # ------------------------------------------------------------------ memory
 
     def _update_memory_stats(self) -> None:
@@ -797,6 +850,8 @@ class BotService:
             had = self.memory.forget(parsed.sender)
             self._update_memory_stats()
             self.log.emit("memory_forget", sender=parsed.sender, had=had)
+            if not self._save_state():
+                return self._record(parsed, path_len, Decision.DROP_STATE_FAILED, command=command)
             text = "Forgotten." if had else "I had nothing on you."
             decision = Decision.ANSWERED_FORGET
         else:

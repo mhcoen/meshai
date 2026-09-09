@@ -178,6 +178,7 @@ class MeshPotatoApp(App[None]):
             "announce", "announce_failed", "persona_timer_error", "fortune_scheduled", "fortune_posted",
             "fortune_deferred", "fortune_skipped", "fortune_error", "post", "post_error", "memory_forget",
             "queued", "dequeued",
+            "state_restored", "state_error",
         ):
             details = {k: v for k, v in record.items() if k not in ("ts", "event")}
             line = f"{ts} [{event}] {details}"

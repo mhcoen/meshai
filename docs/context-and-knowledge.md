@@ -26,8 +26,10 @@ erase shared history or logs.
 
 This reduces duplicated examples that can encourage parroting, but does not
 guarantee novel answers. There is no generated summarization or extra model call.
-Existing memory population, age, and size limits remain unchanged; conversation
-state stays in RAM and is lost at restart. Optional logs can still contain chats.
+Existing memory population, age, and size limits remain unchanged. Conversation
+state is backed by a local SQLite file and survives restarts; restored text is
+re-checked by the injection gate. Channel history additionally expires after one
+hour by default. See [Conversation storage](storage.md). Optional logs are separate.
 
 ## Offline radio references
 

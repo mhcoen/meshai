@@ -11,7 +11,7 @@ channel_idx = 1                   # must exist on the radio; the bot refuses to 
 [bot]
 bot_name = "Mesh Potato"               # MUST equal the radio's node name (loop guard depends on it)
 trigger_prefix = ""               # "" answers every message on the channel; "!ai " for shared channels
-reply_max_chars = 147             # total, including "@[sender] "; 160 minus "Mesh Potato: "
+# Reply size is calculated automatically from the UTF-8 length of bot_name.
 prompt_max_chars = 160            # longer prompts are dropped (the radio delivers at most 160 anyway)
 reply_delay_s = 8.0               # hold the reply this long (jittered) after the question so it misses the repeaters
 shorten_retries = 2               # times a too-long reply goes back to the model with the exact limit
@@ -60,7 +60,10 @@ duty_high = 0.15                  # at/above this it is paused; relaxes one step
 tx_duty_budget = 0.02             # THE DIAL: share of channel time the bot may use for its own transmissions
 
 [history]
+state_db = "meshpotato.sqlite3"   # local SQLite file; "" keeps conversations in RAM only
+state_save_interval_s = 5.0      # checkpoint interval; also saves on shutdown and immediately for /forget
 history_size = 20                 # ring buffer of recent channel lines, including the bot's own
+history_max_age_s = 3600.0        # discard channel chatter older than one hour, including across restarts
 transcript_max_chars = 1500       # rendered transcript budget; truncated from the oldest end
 person_memory_rounds = 20         # answered exchanges remembered per sender name
 person_memory_days = 14            # rounds older than this are dropped

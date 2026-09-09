@@ -11,7 +11,7 @@ any key may appear in any section.
 | `channel_idx` | `1` | Channel slot on the radio to serve |
 | `bot_name` | `Mesh Potato` | Must equal the radio's node name |
 | `trigger_prefix` | `""` | Off by default, so every message is answered; `"!ai "` answers only messages beginning with that exact text |
-| `reply_max_chars` | `147` | Character cap including the exact-name mention; UTF-8 bytes must also fit in 160 minus the encoded node name and 2 |
+| `reply_max_chars` | automatic | Omit to calculate 160 minus the UTF-8 byte length of `bot_name` minus 2 (147 for Mesh Potato). Optionally set a smaller character cap, including the exact-name mention; every reply is also checked in UTF-8 bytes. |
 | `prompt_max_chars` | `160` | Longer prompts are dropped |
 | `reply_delay_s` | `8.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](../README.md#rate-limits-and-channel-load) |
 | `shorten_retries` | `2` | Times a reply that does not fit goes back to the model with the exact limit |
@@ -51,7 +51,10 @@ any key may appear in any section.
 | `duty_low` | `0.05` | Receive duty cycle at which the rate is halved |
 | `duty_high` | `0.15` | Receive duty cycle at which replies pause |
 | `tx_duty_budget` | `0.02` | Own-transmit airtime target, not a hard ceiling or network-wide budget |
-| `history_size` | `20` | Channel lines kept in memory |
+| `state_db` | `meshpotato.sqlite3` | SQLite conversation file, relative to the working directory; `""` disables persistence |
+| `state_save_interval_s` | `5.0` | Seconds between snapshots; also saves on clean shutdown and immediately for `/forget` |
+| `history_size` | `20` | Maximum recent channel lines, including saved history |
+| `history_max_age_s` | `3600.0` | Expire channel lines after one hour, including across restarts |
 | `transcript_max_chars` | `1500` | Size of the transcript given to the model |
 | `person_memory_rounds` | `20` | Answered exchanges remembered per sender name |
 | `person_memory_days` | `14` | Rounds older than this are dropped |

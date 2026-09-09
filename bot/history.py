@@ -47,13 +47,14 @@ class History:
     def snapshot(self) -> list[tuple[float, HistoryEntry]]:
         if self.max_age_s is not None:
             now = self._clock()
-            self._buf = deque(((at, e) for at, e in self._buf if now - self.max_age_s <= at <= now),
+            self._buf = deque(((at, e) for at, e in self._buf if now - self.max_age_s <= at),
                               maxlen=self._buf.maxlen)
         return list(self._buf)
 
     def restore(self, rows: Iterable[tuple[float, HistoryEntry]]) -> None:
+        now = self._clock()
         self._buf.clear()
-        self._buf.extend(rows)
+        self._buf.extend((min(at, now), entry) for at, entry in rows)
         self.snapshot()
 
     def render(self, max_chars: int) -> str:

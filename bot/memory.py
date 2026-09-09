@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -69,11 +69,11 @@ class PersonMemory:
         return [(sender, list(rounds)) for sender, rounds in self._people.items()]
 
     def restore(self, people: Iterable[tuple[str, list[Round]]]) -> None:
-        """Restore original timestamps and LRU order, enforcing current bounds."""
+        """Keep LRU order and age limits; clamp future timestamps after clock rollback."""
         self._people.clear()
         now = self._clock()
         for sender, rounds in people:
-            fresh = [r for r in rounds if now - self.max_age_s <= r.at <= now]
+            fresh = [replace(r, at=min(r.at, now)) for r in rounds if now - self.max_age_s <= r.at]
             if fresh:
                 self._people[sender] = deque(fresh, maxlen=self.rounds)
         while len(self._people) > self.max_people:
@@ -91,8 +91,10 @@ class PersonMemory:
 
     def _expire(self, sender: str, rounds: deque[Round]) -> None:
         cutoff = self._clock() - self.max_age_s
-        while rounds and rounds[0].at < cutoff:
-            rounds.popleft()
+        # Clock rollback can put an older timestamp behind a newer one.
+        fresh = [r for r in rounds if r.at >= cutoff]
+        rounds.clear()
+        rounds.extend(fresh)
 
     @property
     def people(self) -> int:

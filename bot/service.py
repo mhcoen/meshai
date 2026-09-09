@@ -677,7 +677,7 @@ class BotService:
         try:
             self._state_store.save(self.history, self.memory)
             return True
-        except StateError as exc:
+        except Exception as exc:  # a failed checkpoint must not kill the saver or abort shutdown
             self.log.emit("state_error", error=str(exc))
             return False
 

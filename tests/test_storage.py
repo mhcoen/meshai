@@ -77,7 +77,7 @@ def test_retention_applies_on_load_and_prunes_database(tmp_path):
         store.close()
 
 
-def test_clock_rollback_does_not_restore_future_context(tmp_path):
+def test_clock_rollback_restores_context_with_clamped_timestamps(tmp_path):
     clock = FakeClock()
     history, memory = containers(clock)
     history.append(HistoryEntry("Alice", "Hi"))
@@ -87,7 +87,12 @@ def test_clock_rollback_does_not_restore_future_context(tmp_path):
         store.save(history, memory)
         clock.advance(-10)
         store.load(history, memory, InjectionGate())
-        assert not history.entries() and not memory.snapshot()
+        assert history.snapshot() == [(clock(), HistoryEntry("Alice", "Hi"))]
+        assert memory.rounds_for("Alice")[0].at == clock()
+        assert memory.rounds_for("Alice")[0].prompt == "Hi"
+        store.save(history, memory)
+        store.load(history, memory, InjectionGate())
+        assert history.snapshot()[0][0] == memory.rounds_for("Alice")[0].at == clock()
     finally:
         store.close()
 

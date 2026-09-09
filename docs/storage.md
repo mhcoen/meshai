@@ -19,8 +19,10 @@ fetching messages.
   context deduplication and age limits still work after restarting.
 
 Age is measured using wall-clock timestamps, not uptime. Time spent shut
-down counts toward expiration. Future-dated entries are discarded on restore
-if the computer's clock has moved backward. Keep the computer clock correct.
+down counts toward expiration. A backward clock correction does not erase live
+history. On restore, future timestamps are clamped to the current time so recent
+conversations survive and age normally afterward; already-expired entries are
+still dropped. Keep the computer clock correct.
 
 Queued questions, rate-limit tokens, persona switches, and fortune schedules
 are not saved. Restarting does not replay old requests or transmit old replies.

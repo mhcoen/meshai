@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from bot.config import API_KEY_ENV, Config
+from bot.config import API_KEY_ENV, LEGACY_API_KEY_ENV, Config
 
 
 @dataclass(frozen=True)
@@ -120,6 +120,6 @@ def make_backend(cfg: Config, env: Mapping[str, str] | None = None) -> Backend:
             model=cfg.model,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,
-            api_key=env.get(API_KEY_ENV) or None,
+            api_key=env.get(API_KEY_ENV, env.get(LEGACY_API_KEY_ENV)) or None,
         )
     raise ValueError(f"unknown backend: {cfg.backend}")

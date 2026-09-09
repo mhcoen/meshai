@@ -1,4 +1,4 @@
-"""Command-line entry point: ``meshai --config config.toml [--headless]``."""
+"""Command-line entry point: ``meshpotato --config config.toml [--headless]``."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ from bot.lifecycle import disconnect
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="meshai", description="MeshCore channel bot backed by a local LLM")
+    parser = argparse.ArgumentParser(prog="meshpotato", description="MeshCore channel bot backed by a local LLM")
     parser.add_argument("--config", default="config.toml", help="path to the TOML config (default: config.toml)")
     parser.add_argument("--headless", action="store_true", help="no TUI; JSON log only")
     parser.add_argument("--log-file", default=None, help="override log_file from config")
@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LOG",
         help="read a JSON log and report anything the radio heard that the bot never received, then exit",
     )
-    parser.add_argument("--version", action="version", version=f"meshai {__version__}")
+    parser.add_argument("--version", action="version", version=f"meshpotato {__version__}")
     return parser
 
 
@@ -106,7 +106,7 @@ def _port_hint(port: str) -> str:
     except Exception:  # noqa: BLE001
         found = []
     if found:
-        return "serial ports present: " + ", ".join(found) + ". Set `port` in config.toml (or MESHAI_PORT) to the radio."
+        return "serial ports present: " + ", ".join(found) + ". Set `port` in config.toml (or MESHPOTATO_PORT) to the radio."
     return "no USB serial ports found. Is the radio plugged in? Check with: ls /dev/cu.* (macOS) or ls /dev/ttyUSB* /dev/ttyACM* (Linux)."
 
 
@@ -243,13 +243,13 @@ async def _run_connected(cfg: Config, service: BotService, headless: bool, log: 
         await service.stop()
         return 0
 
-    from bot.tui import MeshAIApp  # imported lazily so headless runs need no terminal features
+    from bot.tui import MeshPotatoApp  # imported lazily so headless runs need no terminal features
 
     async def run_service() -> None:
         await service.start()
         await asyncio.Event().wait()  # until quit or cancellation
 
-    app = MeshAIApp(
+    app = MeshPotatoApp(
         cfg=cfg,
         stats=service.stats,
         limiter=service.limiter,
@@ -289,7 +289,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     log_path = args.log_file if args.log_file is not None else (cfg.log_file or None)
     if log_path is None and not args.headless:
-        log_path = "meshai.jsonl"  # the TUI owns the terminal, so stderr is not a usable log target
+        log_path = "meshpotato.jsonl"  # the TUI owns the terminal, so stderr is not a usable log target
         print(f"JSON log: {log_path}", file=sys.stderr)
     if args.debug:
         # meshcore calls logging.basicConfig at import, so configure handlers explicitly.

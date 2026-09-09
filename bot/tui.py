@@ -17,8 +17,8 @@ from bot.ratelimit import RateLimiter
 from bot.service import Stats
 
 
-class MeshAIApp(App[None]):
-    TITLE = "MeshAI"
+class MeshPotatoApp(App[None]):
+    TITLE = "Mesh Potato"
     CSS = """
     Horizontal#top { height: 14; }
     #status, #limits, #util { width: 1fr; border: round $primary; padding: 0 1; }

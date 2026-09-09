@@ -18,8 +18,8 @@ def test_parse_command_prefix_and_case():
 
 def test_help_line_lists_every_persona_and_the_timeout():
     line = build_help(["funny", "marvin"], 120, "/")
-    assert line == "/funny /marvin switch my voice for 120 min, /reset restores it, /forget wipes my memory of you."
-    assert build_help(["a"], 90.5, "/").startswith("/a switch my voice for 90.5 min")
+    assert line == "2/2 /funny /marvin set my voice for 120 min; /reset restores it; /forget clears my memory of you."
+    assert build_help(["a"], 90.5, "/").startswith("2/2 /a set my voice for 90.5 min")
 
 
 def test_builtin_presets_carry_the_safety_clauses():
@@ -41,12 +41,13 @@ async def test_switch_is_silent_and_changes_the_system_prompt(harness):
     assert [e.line() for e in h.history.entries()][0] == "Alice: /marvin"  # commands stay in history
 
 
-async def test_help_and_unknown_commands_reply_with_the_help_line(harness):
+async def test_help_and_unknown_commands_reply_with_both_help_pages(harness):
     h = harness(global_burst=5, sender_burst=5)
     assert await h.say("Alice: /help") is Decision.ANSWERED_HELP
-    assert h.sent[-1] == (1, "@[Alice] " + h.cfg.help_message)
+    assert h.sent[-1] == (1, h.cfg.help_message)
     assert await h.say("Bob: /dance") is Decision.ANSWERED_HELP
-    assert h.sent[-1] == (1, "@[Bob] " + h.cfg.help_message)
+    assert h.sent[-1] == (1, h.cfg.help_message)
+    assert h.sent == [(1, page) for page in h.cfg.help_pages] * 2
     assert h.backend.calls == []
     assert h.inbound_records()[-1]["command"] == "dance"
 

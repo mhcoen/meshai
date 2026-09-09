@@ -21,7 +21,7 @@ def test_cli_and_project_use_the_announced_version(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["--version"])
     assert exc.value.code == 0
-    assert capsys.readouterr().out.strip() == f"meshai {__version__}"
+    assert capsys.readouterr().out.strip() == f"meshpotato {__version__}"
 
 
 @pytest.mark.parametrize("name,display", [("MeshAI", "MeshAI"), ("OtherAI", "OtherAI"), ("M\u00e9shAI", "MeshAI")])
@@ -29,7 +29,7 @@ async def test_start_announces_name_and_version_once_without_model(harness, name
     h = harness(bot_name=name)
     await asyncio.gather(h.service.start(), h.service.start())
     await asyncio.wait_for(h.service._startup_announcement_task, 1)
-    assert h.sent == [(1, f"{display} v{__version__}, LLM: {h.cfg.model}, https://github.com/mhcoen/meshai")]
+    assert h.sent == [(1, f"{display} v{__version__}, LLM: {h.cfg.model}, https://github.com/mhcoen/meshpotato Try /help.")]
     assert len(h.sent[0][1]) <= h.cfg.reply_max_chars
     assert len(f"{h.cfg.bot_name}: {h.sent[0][1]}".encode("utf-8")) <= 160
     assert h.backend.calls == []
@@ -67,7 +67,7 @@ async def test_start_announcement_waits_for_rate_token(harness, clock):
     assert h.sent == []
     clock.advance(15)
     await asyncio.wait_for(task, 1)
-    assert h.sent == [(1, f"MeshAI v{__version__}, LLM: {h.cfg.model}, https://github.com/mhcoen/meshai")]
+    assert h.sent == [(1, f"MeshAI v{__version__}, LLM: {h.cfg.model}, https://github.com/mhcoen/meshpotato Try /help.")]
     await h.service.stop()
 
 
@@ -150,7 +150,7 @@ async def test_start_announces_configured_model_for_either_backend(clock, backen
     h = Harness(make_config(backend=backend, model=model), FakeBackend(), clock)
     await h.service.start()
     await asyncio.wait_for(h.service._startup_announcement_task, 1)
-    assert h.sent == [(1, f"MeshAI v{__version__}, LLM: {model}, https://github.com/mhcoen/meshai")]
+    assert h.sent == [(1, f"MeshAI v{__version__}, LLM: {model}, https://github.com/mhcoen/meshpotato Try /help.")]
     assert h.backend.calls == []
     await h.service.stop()
 
@@ -164,3 +164,28 @@ async def test_invalid_startup_identification_is_skipped_without_truncation(harn
     assert h.limiter.snapshot()["global_tokens"] == 1
     assert any(r["event"] == "announce_failed" and r["what"] == "startup" for r in h.records)
     await h.service.stop()
+
+
+async def test_startup_help_hint_uses_configured_prefixes(harness):
+    h = harness(trigger_prefix="!ai ", command_prefix="!")
+    try:
+        await h.service.start()
+        await asyncio.wait_for(h.service._startup_announcement_task, 1)
+        assert len(h.sent) == 1
+        assert h.sent[0][1].endswith(" Try !ai !help.")
+    finally:
+        await h.service.stop()
+
+
+async def test_startup_omits_hint_if_only_identification_fits(harness):
+    base = f"MeshAI v{__version__}, LLM: , https://github.com/mhcoen/meshpotato"
+    model = "m" * (150 - len(base))
+    h = harness(model=model)
+    try:
+        await h.service.start()
+        await asyncio.wait_for(h.service._startup_announcement_task, 1)
+        assert h.sent == [(1, f"MeshAI v{__version__}, LLM: {model}, https://github.com/mhcoen/meshpotato")]
+        assert len(h.sent[0][1]) == h.cfg.reply_max_chars
+        assert len(f"MeshAI: {h.sent[0][1]}".encode()) <= 160
+    finally:
+        await h.service.stop()

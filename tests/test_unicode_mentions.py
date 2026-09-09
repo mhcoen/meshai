@@ -53,12 +53,12 @@ async def test_unicode_mention_fallback_is_not_truncated(harness):
 
 
 @pytest.mark.parametrize("question,decision", [
-    ("hello", Decision.APOLOGY), ("/help", Decision.ANSWERED_HELP),
+    ("hello", Decision.APOLOGY),
     ("/reset", Decision.ANSWERED_RESET), ("/forget", Decision.ANSWERED_FORGET),
 ])
 async def test_apology_and_command_mentions_keep_unicode(harness, question, decision):
     sender = "\U0001f31fAndy0"
-    h = harness(backend=FakeBackend(error=RuntimeError("offline")))
+    h = harness(backend=FakeBackend(error=RuntimeError("offline")), global_burst=2, sender_burst=2)
     assert await h.say(f"{sender}: {question}") is decision
     text = h.sent[0][1]
     assert text.startswith(reply_prefix(sender))
@@ -66,7 +66,7 @@ async def test_apology_and_command_mentions_keep_unicode(harness, question, deci
     assert len(f"{h.cfg.bot_name}: {text}".encode("utf-8")) <= 160
 
 
-@pytest.mark.parametrize("question", ["hello", "/help"])
+@pytest.mark.parametrize("question", ["hello"])
 async def test_name_leaving_no_byte_room_is_rejected_before_token(harness, question):
     sender = "\U0001f31f" * 40
     h = harness()

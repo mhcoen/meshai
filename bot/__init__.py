@@ -1,3 +1,3 @@
-"""MeshAI: a MeshCore channel bot that answers with a local LLM, with a prompt injection gate."""
+"""Mesh Potato: a MeshCore channel bot that answers with a local LLM, with a prompt injection gate."""
 
-__version__ = "1.3.0"
+__version__ = "1.5.0"

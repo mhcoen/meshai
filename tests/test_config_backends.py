@@ -12,17 +12,17 @@ MINIMAL = {"radio": {"port": "/dev/fake"}}
 def test_defaults_match_the_agreed_setup():
     cfg = config_from_mapping(MINIMAL, env={})
     assert cfg.channel_idx == 1
-    assert cfg.bot_name == "MeshAI"
+    assert cfg.bot_name == "Mesh Potato"
     assert cfg.trigger_prefix == ""
     assert cfg.backend == "ollama"
     assert cfg.model == "qwen3:30b-a3b-instruct-2507-q4_K_M"
     assert cfg.ollama_think == "off"
-    assert cfg.reply_max_chars == 150
+    assert cfg.reply_max_chars == 147
     assert cfg.reply_delay_s == 8.0
     assert cfg.global_rate_per_min == 4.0
     assert cfg.sender_rate_per_min == 4.0
     assert cfg.injection_threshold == 0.45
-    assert cfg.default_persona == "funny" and set(cfg.personas) == {"funny", "snarky", "marvin", "pirate", "haiku"}
+    assert cfg.default_persona == "funny" and set(cfg.personas) == {"funny", "snarky", "marvin", "pirate", "haiku", "serious"}
     assert cfg.persona_timeout_min == 120 and cfg.command_prefix == "/"
     assert cfg.adaptive_enabled is True
     assert (cfg.duty_low, cfg.duty_high, cfg.tx_duty_budget) == (0.05, 0.15, 0.02)
@@ -55,7 +55,7 @@ def test_missing_port_is_rejected():
         {"backend": "anthropic"},
         {"channel_idx": 300},
         {"reply_max_chars": 0},
-        {"reply_max_chars": 153},  # MeshAI: 160 - 6 - 2 = 152 is the most the radio will carry
+        {"reply_max_chars": 148},  # Mesh Potato: 160 - 11 - 2 = 147 fits
         {"bot_name": "A very long node name here", "reply_max_chars": 150},
         {"injection_threshold": 1.5},
         {"ollama_think": "maybe"},

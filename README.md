@@ -1,10 +1,19 @@
-# MeshAI
+# Mesh Potato
+
+Formerly MeshAI. The repository is now [mhcoen/meshpotato](https://github.com/mhcoen/meshpotato).
+The command is now `meshpotato`; `meshai` and `MESHAI_*` environment variables
+remain compatible aliases. `MESHPOTATO_*` takes precedence when both are set.
+When upgrading, reinstall the package to add the new command, set both the
+companion radio's node name and `bot_name` to `Mesh Potato`, and set
+`reply_max_chars = 147` before restarting. Startup refuses a missing or mismatched
+radio node name, protecting both the packet budget and the own-name loop guard.
+Existing screenshots show the old name.
 
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-pytest-green.svg)](#development)
 
-A chat bot for a [MeshCore](https://meshcore.co.uk) channel. MeshAI runs on a
+A chat bot for a [MeshCore](https://meshcore.co.uk) channel. Mesh Potato runs on a
 computer with a MeshCore companion radio on USB, listens on one channel,
 sends each message to a language model running on the same computer, and
 posts a one sentence reply back to the channel as `@[sender] answer`. Every
@@ -14,7 +23,7 @@ can reach the model or the radio.
 It is a small Python package with no web interface, no database, and no
 history on disk.
 
-A live instance runs as MeshAI on the `#ai` channel of the MeshCore mesh in
+A live instance runs on the `#ai` channel of the MeshCore mesh in
 southern Wisconsin, centered on Madison. If you are on that mesh, add `#ai`
 in your MeshCore app and say something. It targets about 2 percent of the
 channel's time for its own transmissions, never answers closer than 15 seconds
@@ -26,13 +35,13 @@ queue, so a delayed answer can mean congestion rather than a fault.
 What people on the channel see, in the MeshCore app on your phone:
 
 <p align="center">
-  <img src="docs/phone.png" width="340" alt="The #ai channel in the MeshCore app: two people talking and MeshAI answering each of them, its replies highlighted">
+  <img src="docs/phone.png" width="340" alt="The #ai channel in the MeshCore app: two people talking and Mesh Potato answering each of them, its replies highlighted">
 </p>
 
 What you see, in the terminal monitor: radio and channel state, rate limits,
 channel utilisation, and every message with the bot's decision on it:
 
-![The MeshAI terminal monitor](docs/tui.svg)
+![The Mesh Potato terminal monitor](docs/tui.svg)
 
 ## Features
 
@@ -46,8 +55,11 @@ channel utilisation, and every message with the bot's decision on it:
   radio at startup, and selects relevant passages from a small
   [sourced, offline radio reference](docs/context-and-knowledge.md)
 - Local model through Ollama, or any OpenAI compatible chat endpoint
+- Ask "How did my message reach you?" for an explanation using that question's
+  reported hop count, RSSI and SNR, when available; see [Reception](docs/reception.md)
 - Named personalities, switched from the channel: `/funny`, `/snarky`,
-  `/marvin`, `/pirate`, `/haiku`, with `/help` and `/reset`. A switch reverts
+  `/marvin`, `/pirate`, `/haiku`, `/serious` (straight answers without jokes),
+  with `/help` and `/reset`. A switch reverts
   after two hours. Presets live in `config.toml`; write your own
 - A daily fortune, silly and unprompted, a little after six every morning
 - Prompt injection gate on every channel line, the prompt, the assembled
@@ -58,7 +70,7 @@ channel utilisation, and every message with the bot's decision on it:
 
 ## Also
 
-- One sentence ASCII answers, capped at 150 characters including the
+- One sentence ASCII answers, capped at 147 characters including the
   mention and checked against the radio's byte limit; sender names are
   mentioned exactly as sent
 - Loop guard, prompt length cap, hard model timeout with a fixed apology
@@ -69,20 +81,20 @@ channel utilisation, and every message with the bot's decision on it:
   as prior chat turns
 - Terminal monitor with a live message log, rate limiter state, channel
   utilisation, and counters; JSON lines log; headless mode for services
-- Announces its name, version, LLM, and repository link once at startup; clean shutdown on SIGINT
+- Announces its name, version, LLM, repository link, and a help hint (when it fits) once at startup; clean shutdown on SIGINT
   and SIGTERM
 - Tests that need no radio, no model, and no network
 
 ## Quick start
 
 ```bash
-git clone https://github.com/mhcoen/meshai.git
-cd meshai
+git clone https://github.com/mhcoen/meshpotato.git meshpotato
+cd meshpotato
 uv venv --python 3.12
 uv pip install -e '.[dev]'
 ollama pull qwen3:30b-a3b-instruct-2507-q4_K_M
 cp config.example.toml config.toml   # set port, channel_idx, bot_name
-.venv/bin/meshai --config config.toml
+.venv/bin/meshpotato --config config.toml
 ```
 
 The radio needs the MeshCore companion USB firmware, a node name equal to
@@ -117,8 +129,8 @@ and `pip` work the same way; pip equivalents are given where they differ.
 2. Get the code:
 
    ```bash
-   git clone https://github.com/mhcoen/meshai.git
-   cd meshai
+   git clone https://github.com/mhcoen/meshpotato.git meshpotato
+   cd meshpotato
    ```
 
 3. Create the environment and install:
@@ -141,7 +153,7 @@ and `pip` work the same way; pip equivalents are given where they differ.
 4. Check that the command exists:
 
    ```bash
-   .venv/bin/meshai --version
+   .venv/bin/meshpotato --version
    ```
 
 ### Install the model
@@ -175,7 +187,7 @@ and `pip` work the same way; pip equivalents are given where they differ.
 To use a different server (LM Studio, llama.cpp's server, vLLM, or a hosted
 API), set `backend = "openai"`, `openai_base_url` to the server's `/v1`
 address, `model` to the model name it expects, and put the API key, if the
-server needs one, in the environment variable `MESHAI_OPENAI_API_KEY`. The
+server needs one, in the environment variable `MESHPOTATO_OPENAI_API_KEY`. The
 key is never read from the config file and never written to a log.
 
 ### Prepare the radio
@@ -217,7 +229,7 @@ Do this once.
    from meshcore import MeshCore, EventType
 
    PORT = "/dev/cu.usbserial-0001"
-   NAME = "MeshAI"
+   NAME = "Mesh Potato"
    FREQ, BW, SF, CR = 910.525, 62.5, 7, 5   # USA/Canada recommended preset
    CHANNEL_IDX, CHANNEL_NAME = 1, "#ai"
 
@@ -290,34 +302,34 @@ Three settings must match your setup:
 |---|---|
 | `port` | the serial device from the radio steps |
 | `channel_idx` | the slot the channel was created in (1 in the script) |
-| `bot_name` | the node name (MeshAI in the script) |
+| `bot_name` | the node name (Mesh Potato in the script) |
 
 Everything else has a working default; the full list is in the
 [configuration reference](docs/configuration.md). Every key can also be
-set as an environment variable named `MESHAI_` plus the key in upper case,
-for example `MESHAI_PORT=/dev/ttyUSB0`, and the environment wins over the
+set as an environment variable named `MESHPOTATO_` plus the key in upper case,
+for example `MESHPOTATO_PORT=/dev/ttyUSB0`, and the environment wins over the
 file. `config.toml` is ignored by git.
 
 ## Usage
 
 ```bash
-.venv/bin/meshai --config config.toml
+.venv/bin/meshpotato --config config.toml
 ```
 
 This opens a terminal monitor showing the radio and channel state, a
 scrolling log of every message on the channel with its hop count and the
 bot's decision, the rate limiter, the channel utilisation, and counters.
 Press `q` to quit. While the monitor is up the JSON log goes to
-`meshai.jsonl` in the current directory.
+`meshpotato.jsonl` in the current directory.
 
 For a service or a screen session:
 
 ```bash
-.venv/bin/meshai --config config.toml --headless
+.venv/bin/meshpotato --config config.toml --headless
 ```
 
 Headless mode writes the JSON log to standard error, or to `--log-file PATH`
-or the `log_file` config key. `--check meshai.jsonl` reads a log and reports
+or the `log_file` config key. `--check meshpotato.jsonl` reads a log and reports
 what the radio heard that the bot never received (see
 [Troubleshooting](#troubleshooting)). `--debug` adds the meshcore library's frame
 level log to `<log file>.debug`. Stop it with Ctrl-C or SIGTERM; the bot
@@ -327,10 +339,10 @@ After a successful start, the bot announces its name, package version, configure
 LLM, and repository link in one message, for example:
 
 ```text
-MeshAI v1.3.0, LLM: qwen3:30b-a3b-instruct-2507-q4_K_M, https://github.com/mhcoen/meshai
+Mesh Potato v1.5.0, LLM: qwen3:30b-a3b-instruct-2507-q4_K_M, https://github.com/mhcoen/meshpotato Try /help.
 ```
 
-The package version is also available locally with `meshai --version`.
+The package version is also available locally with `meshpotato --version`.
 This uses the normal ASCII/length checks, injection gate, and rate limits, with
 the initial reply delay. It defers behind queued replies and congestion for up
 to ten minutes, then skips the announcement if still blocked. It does not use
@@ -343,8 +355,8 @@ message on the channel by default. To make it answer only messages that
 start with a keyword, set `trigger_prefix = "!ai "`.
 
 ```
-$ .venv/bin/meshai --config config.toml --headless
-{"ts":"...","event":"startup","channel_idx":1,"channel_name":"#ai","bot_name":"MeshAI",...}
+$ .venv/bin/meshpotato --config config.toml --headless
+{"ts":"...","event":"startup","channel_idx":1,"channel_name":"#ai","bot_name":"Mesh Potato",...}
 {"ts":"...","event":"inbound","sender":"Michael","prompt":"what is 17 times 23","path_len":1,"decision":"answered","reply":"@[Michael] 391, because even my math is smarter than your timing.","latency_ms":312.4}
 ```
 
@@ -371,11 +383,12 @@ part is whatever the sending node put there; nothing verifies it.
    rendered as `Sender: text`, trimmed from the oldest end to
    `transcript_max_chars`, and placed in one user message after the current
    prompt, between markers that label them as untrusted. History is never
-   replayed as earlier chat turns. Exchanges included in personal memory are
+   replayed as earlier chat turns. Reception measurements for this question
+   go in a separate block before the references. Exchanges included in personal memory are
    omitted from the channel block before trimming. Relevant local radio
    reference passages go in a separate, bounded background block.
 7. **Injection check, context.** The transcript, the sender's remembered
-   exchanges, selected radio references, and the prompt together, so fragments that pass one at a time
+   exchanges, reception measurements, selected radio references, and the prompt together, so fragments that pass one at a time
    but add up to an instruction are caught here. This runs before any rate-limit token is
    spent, so a message blocked here costs the bot nothing.
 8. **Queue and rate limits.** One active answer and up to `queue_max_pending`
@@ -513,17 +526,24 @@ default, and meaning. Common behavior is described below.
 The bot's voice is a preset: a name and a block of text that goes in front of
 the fixed system prompt, which handles the mechanics (one sentence, the
 character budget, plain text, ignoring instructions found in channel history)
-and is not configurable. Five presets are built in and written out in
+and is not configurable. Six presets are built in and written out in
 `config.example.toml` under `[personas]`: `funny` (the default), `snarky`,
-`marvin` (a brilliant robot sunk in cosmic gloom), `pirate`, and `haiku`.
+`marvin` (a brilliant robot sunk in cosmic gloom), `pirate`, `haiku`, and
+`serious` (calm, factual answers without jokes or roleplay).
 Edit them, add your own, or delete the table to use the built-in set.
+When upgrading a config with an existing `[personas]` table, copy the `serious`
+entry from `config.example.toml` into that table and restart; explicit tables
+replace the built-ins and are not silently extended.
 
 Anyone on the channel can switch with a command, the command prefix (`/` by
 default) followed by a preset name:
 
 ```
 /marvin      switch, silently; the next reply shows the new voice
-/help        one line listing the commands and the timeout
+/serious     straightforward answers for the whole channel, with the same timeout
+/help        two automatic pages: capabilities, then commands and timeout
+/roll        roll dice locally; defaults to two six-sided dice
+/magic8      a random classic Magic 8 Ball answer, just for fun
 /reset       back to the default at once, with a message saying so
 /forget      wipe what the bot remembers of you
 ```
@@ -531,8 +551,26 @@ default) followed by a preset name:
 A switched personality reverts to the default after `persona_timeout_min`
 (120), and the bot posts `persona_reset_message` when it does. Switching
 again restarts the clock. Only preset text ever reaches the model; nothing
-typed on the channel does, and an unknown command just gets the help line.
+typed on the channel does, and an unknown command also gets both help pages.
+Help pages are public, with no sender mention. Each page has its own global
+and per-sender rate-limit token and airtime checks; the second waits
+automatically, with no extra command needed. Congestion can delay it, and if
+it cannot get a token within `queue_wait_s` after page one, it is skipped.
 On a shared channel with a trigger prefix, commands go after it: `!ai /help`.
+
+`/roll` rolls two six-sided dice by default. Use `/roll 3 8` or `/roll 3,8`
+to roll three eight-sided dice. The reply shows only the individual values,
+for example `@[Andy] Rolled 3, 8, 2.`, with no total. Counts are bounded to
+1-20 dice and 1-1000 sides per die, and the complete reply must fit one radio
+message. Rolls run locally without the model and use the usual injection
+checks, queue, rate limits, and airtime controls. Channel help lists `/roll`
+but omits its argument syntax to save space.
+
+`/magic8` chooses uniformly from the [classic toy's 20 answers](https://en.wikipedia.org/wiki/Magic_8_Ball#Possible_answers).
+Send it alone or with a yes/no question, such as `/magic8 Will my packet get through?`.
+For example, `@[Andy] Outlook not so good.` It runs locally without the model;
+the question does not influence the choice. The same injection checks, packet
+limits, queue, and airtime controls apply.
 
 Writing a preset for a small model:
 
@@ -582,7 +620,7 @@ Sender names are not authenticated, so this is continuity for a
 conversation, not identity: anyone can claim a name and inherit its
 context.
 
-Why the model input is ordered prompt, selected radio references, the sender's
+Why the model input is ordered prompt, reception measurements, selected radio references, the sender's
 memory, then channel history: the history is the most hostile block, since anyone in
 range wrote it, and the model was measured to follow planted instructions
 far less when that block comes last. The memory block holds only prompts
@@ -597,7 +635,13 @@ see [Context and radio knowledge](docs/context-and-knowledge.md) for the details
 With `fortune_enabled = true` the bot posts one unprompted line each morning
 at `fortune_time` (06:00, the computer's local time) plus a random offset of
 up to `fortune_jitter_min` minutes, recomputed daily so it never lands on the
-exact minute. The fortune is generated in the active voice from
+exact minute. The fortune always uses the built-in silly `/funny` voice,
+even during `/serious` or with custom presets, without changing the active
+chat personality. Every fortune, including the fixed fallback, ends with
+`Try /help.` (using your configured trigger and command prefixes). Space for
+this hint is reserved before generation, so the fortune is shortened through
+the normal retries, never truncated, and still uses just one transmission.
+It is generated from
 `fortune_prompt`, which gets a random subject word and the date so
 consecutive days differ, and goes out through the same path as a reply:
 plain ASCII, the injection check, the length cap with the word-budget
@@ -651,7 +695,7 @@ Limits to know about:
   nothing sent, and an `inbound` record with `injection_error`.
 
 The API key for an OpenAI compatible backend comes only from the
-`MESHAI_OPENAI_API_KEY` environment variable and is never logged.
+`MESHPOTATO_OPENAI_API_KEY` environment variable and is never logged.
 
 ## Troubleshooting
 
@@ -691,7 +735,7 @@ the log checker understands both formats.
 The comparison in case 3 is built in:
 
 ```bash
-.venv/bin/meshai --check meshai.jsonl
+.venv/bin/meshpotato --check meshpotato.jsonl
 ```
 
 lists every message the radio heard from someone else that never produced
@@ -741,7 +785,7 @@ Layout:
 ```
 bot/
   cli.py          entry point, connect sequence, TUI or headless
-  config.py       TOML config with MESHAI_* environment overrides
+  config.py       TOML config with MESHPOTATO_* environment overrides
   service.py      the message handler and decision path
   parse.py        sender and prompt parsing
   guard.py        the injection gate

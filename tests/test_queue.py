@@ -296,8 +296,11 @@ async def test_command_replies_wait_for_tokens(queued, clock, command, decision)
     await until(lambda: h.service.stats.queue_depth == 1)
     assert len(h.sent) == 1
     clock.advance(15)
+    if command == "/help":
+        await until(lambda: len(h.sent) == 2)
+        clock.advance(60)  # second page needs a fresh global and sender token
     assert await asyncio.wait_for(task, 1) is decision
-    assert len(h.sent) == 2 and len(h.backend.calls) == 1
+    assert len(h.sent) == (3 if command == "/help" else 2) and len(h.backend.calls) == 1
 
 
 @pytest.mark.parametrize("reply,error,decision", [
@@ -333,12 +336,12 @@ async def test_send_failure_does_not_retry_and_next_question_waits(queued, clock
 
 
 async def test_queue_expired_and_full_render_in_terminal(queued):
-    from bot.tui import MeshAIApp
+    from bot.tui import MeshPotatoApp
 
     h = queued()
     s = h.service.stats
     s.queue_depth, s.queue_expired, s.queue_full = 3, 2, 1
-    app = MeshAIApp(h.cfg, s, h.limiter, lambda listener: None, h.service.start, h.service.stop)
+    app = MeshPotatoApp(h.cfg, s, h.limiter, lambda listener: None, h.service.start, h.service.stop)
     async with app.run_test() as pilot:
         await pilot.pause()
         text = str(app.query_one("#limits").render())

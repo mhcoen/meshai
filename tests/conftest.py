@@ -147,7 +147,10 @@ class FakeBackend:
 def make_config(**overrides: Any) -> Config:
     # Legacy unit tests exercise immediate rate-limit decisions with a frozen
     # clock. Queue behavior/defaults are exercised explicitly in test_queue.py.
-    values: dict[str, Any] = {"port": "/dev/fake", "reply_delay_s": 0.0, "queue_max_pending": 0}
+    # Keep the historical six-byte identity and 150-character edge cases explicit.
+    # Current release defaults and the longer node name have dedicated tests.
+    values: dict[str, Any] = {"port": "/dev/fake", "reply_delay_s": 0.0, "queue_max_pending": 0,
+                              "bot_name": "MeshAI", "reply_max_chars": 150}
     values.update(overrides)
     return config_from_mapping(values, env={})
 
@@ -158,6 +161,7 @@ class Harness:
         self.backend = backend
         self.clock = clock
         self.mc = FakeMeshCore(channel_name)
+        self.mc.self_info["name"] = cfg.bot_name  # normal setup; mismatch tests override explicitly
         self.records: list[dict[str, Any]] = []
         self.log = EventLog(stream=io.StringIO())
         self.log.subscribe(self.records.append)

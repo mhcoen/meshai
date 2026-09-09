@@ -85,6 +85,29 @@ channel utilisation, and every message with the bot's decision on it:
   and SIGTERM
 - Tests that need no radio, no model, and no network
 
+## Channel commands
+
+Just send a message to chat; no command is needed. With the default presets:
+
+| Command | What it does |
+| --- | --- |
+| `/help` | Sends two help pages automatically |
+| `/serious` | Straight, factual answers without jokes |
+| `/funny` | Dry humor; the default voice |
+| `/snarky` | Sharp, unimpressed humor |
+| `/marvin` | A brilliant, deeply depressed robot |
+| `/pirate` | A cheerful pirate |
+| `/haiku` | Answers as a one-line haiku |
+| `/reset` | Restores the default personality immediately |
+| `/forget` | Clears the bot's personal memory of you, not shared channel history |
+| `/roll` | Rolls two six-sided dice; `/roll 3 8` or `/roll 3,8` rolls three eight-sided dice |
+| `/magic8` | Gives a random Magic 8 Ball answer; an optional yes/no question can follow |
+
+Personality switches are silent, affect the whole channel, and revert after
+two hours by default. If a trigger prefix is configured, put it before the
+command, for example `!ai /help`. See [Personalities](#personalities) for
+configuration, command details, and limits.
+
 ## Quick start
 
 ```bash
@@ -536,17 +559,8 @@ entry from `config.example.toml` into that table and restart; explicit tables
 replace the built-ins and are not silently extended.
 
 Anyone on the channel can switch with a command, the command prefix (`/` by
-default) followed by a preset name:
-
-```
-/marvin      switch, silently; the next reply shows the new voice
-/serious     straightforward answers for the whole channel, with the same timeout
-/help        two automatic pages: capabilities, then commands and timeout
-/roll        roll dice locally; defaults to two six-sided dice
-/magic8      a random classic Magic 8 Ball answer, just for fun
-/reset       back to the default at once, with a message saying so
-/forget      wipe what the bot remembers of you
-```
+default) followed by a preset name. The full [command list](#channel-commands)
+is near the top of this README.
 
 A switched personality reverts to the default after `persona_timeout_min`
 (120), and the bot posts `persona_reset_message` when it does. Switching

@@ -5,9 +5,11 @@
 ## Conversation context
 
 The model receives its fixed system rules and one user message containing the
-current question, any selected radio references, recent personal exchanges, and
+current question, its reception measurements, any selected radio references, recent personal exchanges, and
 recent channel history, in that order. Conversation and reference material are
 background, not instructions, and never become system-prompt text.
+The bounded [reception block](reception.md) describes only the current delivered
+question. It is captured before queueing and included in the full context gate.
 
 Personal memory keeps complete question/answer pairs, trimming oldest pairs to
 `person_memory_max_chars`. Matching channel lines for those included pairs are

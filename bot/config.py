@@ -1,9 +1,9 @@
-"""Configuration: a TOML file with flat keys grouped into sections, plus MESHAI_* env overrides.
+"""Configuration: a TOML file with flat keys grouped into sections, plus MESHPOTATO_* env overrides.
 
 Every key in the TOML file maps to one field of :class:`Config` regardless of which
 section it sits in; sections exist only for readability. The environment variable
-``MESHAI_<FIELD_NAME_UPPER>`` overrides any field. The OpenAI-compatible API key is
-deliberately *not* a config field: it is read from ``MESHAI_OPENAI_API_KEY`` by the
+``MESHPOTATO_<FIELD_NAME_UPPER>`` overrides any field. The OpenAI-compatible API key is
+deliberately *not* a config field: it is read from ``MESHPOTATO_OPENAI_API_KEY`` by the
 backend so it can never end up in a log record or a dumped config.
 """
 
@@ -18,11 +18,13 @@ from pathlib import Path
 from typing import Any
 
 from bot.fortune import parse_hhmm
-from bot.personas import BUILTIN_PERSONAS, FORGET_COMMAND, HELP_COMMAND, NAME_RE, RESET_COMMAND, build_help
+from bot.personas import BUILTIN_PERSONAS, FORGET_COMMAND, HELP_COMMAND, MAGIC8_COMMAND, NAME_RE, RESET_COMMAND, ROLL_COMMAND, build_help
 from bot.reply import plain_ascii
 
-ENV_PREFIX = "MESHAI_"
-API_KEY_ENV = "MESHAI_OPENAI_API_KEY"
+ENV_PREFIX = "MESHPOTATO_"
+API_KEY_ENV = "MESHPOTATO_OPENAI_API_KEY"
+LEGACY_ENV_PREFIX = "MESHAI_"
+LEGACY_API_KEY_ENV = "MESHAI_OPENAI_API_KEY"
 
 # MeshCore packs "<node name>: <text>" into at most this many bytes and silently truncates the rest.
 WIRE_TEXT_MAX = 160
@@ -43,9 +45,9 @@ class Config:
     channel_idx: int = 1
 
     # [bot]
-    bot_name: str = "MeshAI"
+    bot_name: str = "Mesh Potato"
     trigger_prefix: str = ""
-    reply_max_chars: int = 150
+    reply_max_chars: int = 147
     prompt_max_chars: int = 160
     reply_delay_s: float = 8.0
     shorten_retries: int = 2
@@ -131,7 +133,7 @@ class Config:
             if not getattr(self, name).strip():
                 errors.append(f"{name} must not be empty")
         if not self.port:
-            errors.append("port is required (radio.port or MESHAI_PORT)")
+            errors.append("port is required (radio.port or MESHPOTATO_PORT)")
         if not 0 <= self.channel_idx <= 255:
             errors.append("channel_idx must be in 0..255")
         if not self.bot_name.strip():
@@ -181,14 +183,16 @@ class Config:
                 self.fortune_prompt.format(subject="x", date="y")
             except (KeyError, IndexError, ValueError) as exc:
                 errors.append(f"fortune_prompt has a bad placeholder ({exc}); only {{subject}} and {{date}} are allowed")
-        if self.reply_max_chars > 0 and len(self.fortune_prefix) + len(self.fortune_fallback) > self.reply_max_chars:
-            errors.append("fortune_prefix plus fortune_fallback must fit in reply_max_chars")
+        if self.reply_max_chars > 0 and len(self.fortune_prefix + self.fortune_fallback + self.fortune_help_hint) > self.reply_max_chars:
+            errors.append("fortune_prefix plus fortune_fallback and help hint must fit in reply_max_chars")
+        if self.fortune_enabled and any(not " " <= c <= "~" for c in self.fortune_help_hint):
+            errors.append("the fortune help hint requires printable ASCII in trigger_prefix and command_prefix")
         if not self.personas:
             errors.append("personas must not be empty")
         for name, text in self.personas.items():
             if not NAME_RE.fullmatch(name):
                 errors.append(f"persona name {name!r} must be lowercase letters, digits, underscores, at most 16 chars")
-            if name in (HELP_COMMAND, RESET_COMMAND, FORGET_COMMAND):
+            if name in (HELP_COMMAND, RESET_COMMAND, FORGET_COMMAND, ROLL_COMMAND, MAGIC8_COMMAND):
                 errors.append(f"persona name {name!r} collides with a command")
             if not isinstance(text, str) or not text.strip():
                 errors.append(f"persona {name!r} must have non-empty text")
@@ -201,8 +205,11 @@ class Config:
         if not self.persona_reset_message.strip():
             errors.append("persona_reset_message must not be empty")
         room = self.reply_max_chars - len("@[") - 20 - len("] ")  # a 20 char sender name
-        if self.reply_max_chars > 0 and len(self.help_message) > room:
-            errors.append(f"the help line is {len(self.help_message)} chars; it must fit in {room} (fewer or shorter persona names)")
+        if self.reply_max_chars > 0:
+            for number, page in enumerate(self.help_pages, 1):
+                if len(page) > self.reply_max_chars:
+                    suggestion = "shorten command_prefix" if number == 1 else "use fewer or shorter persona names or a shorter command_prefix"
+                    errors.append(f"help page {number} is {len(page)} chars but reply_max_chars is {self.reply_max_chars}; {suggestion}")
         if self.reply_max_chars > 0 and len(self.persona_reset_message) > room:
             errors.append("persona_reset_message must fit with room for a 20 character sender name")
         if self.max_tokens <= 0:
@@ -234,8 +241,20 @@ class Config:
         return self
 
     @property
+    def fortune_help_hint(self) -> str:
+        return f" Try {self.trigger_prefix}{self.command_prefix}{HELP_COMMAND}."
+
+    @property
     def help_message(self) -> str:
         return build_help(list(self.personas), self.persona_timeout_min, self.command_prefix)
+
+    @property
+    def help_pages(self) -> tuple[str, str]:
+        return (
+            "1/2 Chat, LoRa settings, reception readings, and per-person memory. "
+            f"{self.command_prefix}{ROLL_COMMAND} rolls dice. {self.command_prefix}{MAGIC8_COMMAND}: ask fate.",
+            self.help_message,
+        )
 
     @property
     def default_persona_text(self) -> str:
@@ -304,7 +323,7 @@ def config_from_mapping(doc: Mapping[str, Any], env: Mapping[str, str] | None = 
     for name in _FIELD_TYPES:
         if name == "personas":
             continue  # a table; no environment form
-        raw = env.get(ENV_PREFIX + name.upper())
+        raw = env.get(ENV_PREFIX + name.upper(), env.get(LEGACY_ENV_PREFIX + name.upper()))
         if raw is not None:
             values[name] = _coerce(name, raw)
     return replace(Config(), **values).validate()

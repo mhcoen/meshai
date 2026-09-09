@@ -8,8 +8,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from bot.fortune import SUBJECTS, FortuneScheduler, next_fire, parse_hhmm
+from bot.config import ConfigError
+from bot.guard import Verdict
 from bot.jsonlog import EventLog
-from tests.conftest import FakeBackend
+from bot.personas import BUILTIN_PERSONAS
+from tests.conftest import FakeBackend, make_config
 
 TZ = timezone(timedelta(hours=-5))
 
@@ -97,22 +100,47 @@ def make_scheduler(h, wall, **kw):
     return s, records
 
 
-async def test_fire_posts_in_the_active_voice_through_the_reply_path(harness):
+@pytest.mark.parametrize("active", ["pirate", "serious"])
+async def test_fire_posts_in_funny_voice_without_changing_chat_persona(harness, active):
     h = harness(backend=FakeBackend(reply="You will find a sock."), global_burst=5, sender_burst=5)
-    await h.say("Alice: /pirate")
+    await h.say(f"Alice: /{active}")
+    deadline = h.service._persona_deadline
     wall = Clock(at(2026, 9, 4, 6, 3))
     s, records = make_scheduler(h, wall)
     assert await s.fire(at(2026, 9, 4, 6, 3)) is True
-    assert h.sent[-1] == (1, "Fortune: You will find a sock.")
+    assert h.sent[-1] == (1, "Fortune: You will find a sock. Try /help.")
     msgs = h.backend.calls[-1]
-    assert "pirate" in msgs[0]["content"]  # active voice
+    assert BUILTIN_PERSONAS["funny"] in msgs[0]["content"]
+    assert BUILTIN_PERSONAS[active] not in msgs[0]["content"]
+    assert h.service.active_persona == active
+    assert h.service._persona_deadline == deadline
     assert "fortune about " in msgs[1]["content"] and "on Friday, September 4\n" in msgs[1]["content"]
     subject = msgs[1]["content"].split("fortune about ")[1].split(" on ")[0]
     assert subject in SUBJECTS
-    assert h.history.entries()[-1].line() == "MeshAI: Fortune: You will find a sock."
+    assert h.history.entries()[-1].line() == "MeshAI: Fortune: You will find a sock. Try /help."
     assert s.posted == 1
     assert any(r["event"] == "fortune_posted" for r in records)
     assert h.service.stats.posts_sent == 1
+    assert await h.say("Bob: hello") is not None
+    assert BUILTIN_PERSONAS[active] in h.backend.calls[-1][0]["content"]
+    await h.service.stop()
+
+
+@pytest.mark.parametrize("custom_funny", [False, True])
+async def test_fortune_uses_builtin_funny_with_explicit_persona_table(harness, custom_funny):
+    personas = {"serious": BUILTIN_PERSONAS["serious"]}
+    if custom_funny:
+        personas["funny"] = "Voice: solemn and formal."
+    h = harness(personas=personas, default_persona="serious",
+                backend=FakeBackend(replies=["word " * 60, "A sock awaits."]))
+    wall = Clock(at(2026, 9, 4, 6, 3))
+    s, _ = make_scheduler(h, wall)
+    assert await s.fire(wall()) is True
+    assert len(h.backend.calls) == 2
+    for call in h.backend.calls:
+        assert BUILTIN_PERSONAS["funny"] in call[0]["content"]
+        assert BUILTIN_PERSONAS["serious"] not in call[0]["content"]
+    assert h.service.active_persona == "serious"
 
 
 async def test_fire_uses_the_fortune_fallback_when_the_model_will_not_fit(harness):
@@ -120,7 +148,7 @@ async def test_fire_uses_the_fortune_fallback_when_the_model_will_not_fit(harnes
     wall = Clock(at(2026, 9, 4, 6, 3))
     s, records = make_scheduler(h, wall)
     assert await s.fire(wall()) is True
-    assert h.sent[-1] == (1, "Fortune: Fallback fortune.")
+    assert h.sent[-1] == (1, "Fortune: Fallback fortune. Try /help.")
     assert len(h.backend.calls) == 1 + h.cfg.shorten_retries
 
 
@@ -129,7 +157,50 @@ async def test_an_empty_fortune_uses_the_fallback_never_a_bare_prefix(harness):
     wall = Clock(at(2026, 9, 4, 6, 3))
     s, records = make_scheduler(h, wall)
     assert await s.fire(wall()) is True
-    assert h.sent[-1] == (1, "Fortune: Fallback fortune.")
+    assert h.sent[-1] == (1, "Fortune: Fallback fortune. Try /help.")
+
+
+async def test_help_hint_space_is_reserved_before_shortening(harness):
+    cfg = make_config(bot_name="Mesh Potato", reply_max_chars=147)
+    available = cfg.reply_max_chars - len(cfg.fortune_prefix + cfg.fortune_help_hint)
+    h = harness(bot_name=cfg.bot_name, reply_max_chars=cfg.reply_max_chars,
+                backend=FakeBackend(replies=["x" * available + ".", "A sock awaits."]))
+    wall = Clock(at(2026, 9, 4, 6, 3))
+    s, _ = make_scheduler(h, wall)
+    assert await s.fire(wall()) is True
+    assert len(h.backend.calls) == 2
+    assert f"hard limit is {available}" in h.backend.calls[1][-1]["content"]
+    assert h.sent == [(1, "Fortune: A sock awaits. Try /help.")]
+    assert len(f"Mesh Potato: {h.sent[0][1]}".encode()) <= 160
+    assert h.limiter.snapshot()["global_tokens"] == 0
+
+
+async def test_fortune_hint_uses_configured_trigger_and_command_prefixes(harness):
+    h = harness(trigger_prefix="!ai ", command_prefix="!", backend=FakeBackend(reply="A sock awaits."))
+    wall = Clock(at(2026, 9, 4, 6, 3))
+    s, _ = make_scheduler(h, wall)
+    assert await s.fire(wall()) is True
+    assert h.sent == [(1, "Fortune: A sock awaits. Try !ai !help.")]
+
+
+async def test_hint_is_outbound_gated_and_block_refunds_token(harness):
+    class Gate:
+        def check(self, text):
+            return Verdict("Try /help." in text, 1.0, (), text)
+
+    h = harness(gate=Gate())
+    wall = Clock(at(2026, 9, 4, 6, 3))
+    s, _ = make_scheduler(h, wall, cutoff_min=0)
+    assert await s.fire(wall()) is False
+    assert not h.sent
+    assert h.limiter.snapshot()["global_tokens"] == 1
+
+
+def test_config_reserves_fortune_hint_space_and_requires_ascii():
+    with pytest.raises(ConfigError, match="help hint must fit"):
+        make_config(fortune_prefix="x" * 139, fortune_fallback="OK.")
+    with pytest.raises(ConfigError, match="fortune help hint requires printable ASCII"):
+        make_config(trigger_prefix="\U0001f31f")
 
 
 async def test_fire_defers_while_rate_limited_and_posts_when_a_token_returns(harness, clock):
@@ -195,7 +266,7 @@ async def test_scheduler_waits_for_the_slot_then_fires_and_reschedules(harness):
     assert h.sent == []
     wall.advance(15)
     await asyncio.sleep(0.05)
-    assert h.sent == [(1, "Fortune: A fortune.")]
+    assert h.sent == [(1, "Fortune: A fortune. Try /help.")]
     assert s.next_at == at(2026, 9, 5, 6, 0)  # tomorrow, no catch-up
     await s.stop()
     assert s._task is None

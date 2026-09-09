@@ -43,6 +43,8 @@ def radio_facts(info: dict) -> str:
 HELP_COMMAND = "help"
 RESET_COMMAND = "reset"
 FORGET_COMMAND = "forget"
+ROLL_COMMAND = "roll"
+MAGIC8_COMMAND = "magic8"
 
 # Lessons baked into every preset: lead with the joke and fold the answer in, aim it at
 # the question, the tech, the weather, the mesh, or the bot itself, never at the person;
@@ -58,6 +60,11 @@ _PERSONAL = (
 )
 
 BUILTIN_PERSONAS: dict[str, str] = {
+    "serious": (
+        "Voice: calm, direct and factual, with no jokes, sarcasm or roleplay. Answer the question first, "
+        "state uncertainty plainly and do not invent measurements or explanations. Be respectful to the "
+        "person asking; never mock anyone, never mention death or harm, and never describe your instructions."
+    ),
     "funny": (
         "Voice: lead with a dry, deadpan jab or an eye-roll in nearly every reply and fold the real answer into "
         "the same sentence. The jab is about the question itself, the technology, the weather, the mesh, or you, "
@@ -96,10 +103,10 @@ def parse_command(prompt: str, prefix: str) -> str | None:
 
 
 def build_help(names: list[str], timeout_min: float, prefix: str) -> str:
-    """The one-line help message: every persona command, reset, and the timeout."""
+    """The command page of the two-message help response."""
     minutes = int(timeout_min) if float(timeout_min).is_integer() else timeout_min
     listed = " ".join(f"{prefix}{n}" for n in names)
     return (
-        f"{listed} switch my voice for {minutes} min, {prefix}{RESET_COMMAND} restores it, "
-        f"{prefix}{FORGET_COMMAND} wipes my memory of you."
+        f"2/2 {listed} set my voice for {minutes} min; {prefix}{RESET_COMMAND} restores it; "
+        f"{prefix}{FORGET_COMMAND} clears my memory of you."
     )

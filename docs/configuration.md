@@ -9,16 +9,16 @@ any key may appear in any section.
 |---|---|---|
 | `port` | required | Serial device of the companion radio |
 | `channel_idx` | `1` | Channel slot on the radio to serve |
-| `bot_name` | `MeshAI` | Must equal the radio's node name |
+| `bot_name` | `Mesh Potato` | Must equal the radio's node name |
 | `trigger_prefix` | `""` | Off by default, so every message is answered; `"!ai "` answers only messages beginning with that exact text |
-| `reply_max_chars` | `150` | Character cap including the exact-name mention; UTF-8 bytes must also fit in 160 minus the encoded node name and 2 |
+| `reply_max_chars` | `147` | Character cap including the exact-name mention; UTF-8 bytes must also fit in 160 minus the encoded node name and 2 |
 | `prompt_max_chars` | `160` | Longer prompts are dropped |
 | `reply_delay_s` | `8.0` | Seconds after a question before the reply is transmitted, jittered; see [Rate limits and channel load](../README.md#rate-limits-and-channel-load) |
 | `shorten_retries` | `2` | Times a reply that does not fit goes back to the model with the exact limit |
 | `too_long_reply` | `That answer will not fit in one message, ask me something narrower.` | Sent when it still does not fit after the retries |
 | `apology` | `Sorry, I couldn't answer that one.` | Posted on model timeout or error |
 | `facts` | `""` | Local facts added to the system prompt after the built-in LoRa facts and the radio's own settings |
-| `[personas]` | five built-ins | Table of name = text presets; see [Personalities](../README.md#personalities) |
+| `[personas]` | six built-ins | Table of name = text presets, including serious; explicit tables replace the built-ins; see [Personalities](../README.md#personalities) |
 | `default_persona` | `funny` | The preset active at start and after a reset |
 | `persona_timeout_min` | `120` | A switched personality reverts after this long |
 | `persona_reset_message` | `Back to the default personality.` | Posted when it reverts |
@@ -59,4 +59,4 @@ any key may appear in any section.
 | `person_memory_max_chars` | `600` | Size of the remembered block given to the model |
 | `injection_threshold` | `0.45` | Block a message whose injection score is at or above this |
 | `rx_log` | `channel` | Log packets the radio hears: `off`, `channel` (the served channel), or `all` |
-| `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshai.jsonl` (monitor) |
+| `log_file` | `""` | JSON log path; empty means standard error (headless) or `meshpotato.jsonl` (monitor) |

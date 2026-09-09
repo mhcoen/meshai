@@ -31,15 +31,18 @@ from bot import __version__
 from bot.backends import Backend, Completion
 from bot.config import Config, WIRE_TEXT_MAX
 from bot.context import conversation_context
+from bot.dice import parse_dice
 from bot.guard import InjectionGate, Verdict
 from bot.history import History, HistoryEntry
 from bot.jsonlog import EventLog
 from bot.knowledge import Reference, checked_references, select_references
 from bot.memory import PersonMemory
+from bot.magic8 import ANSWERS as MAGIC8_ANSWERS
 from bot.parse import extract_prompt, parse_channel_text
-from bot.personas import FORGET_COMMAND, LORA_FACTS, RESET_COMMAND, parse_command, radio_facts
+from bot.personas import BUILTIN_PERSONAS, FORGET_COMMAND, LORA_FACTS, MAGIC8_COMMAND, RESET_COMMAND, ROLL_COMMAND, parse_command, radio_facts
 from bot.prompt import build_messages, build_user_message
 from bot.ratelimit import RateLimiter, Reservation
+from bot.reception import reception_context
 from bot.reply import compose_reply, shape_reply, reply_prefix, reply_body_room, plain_ascii
 from bot.lifecycle import close_step, disconnect
 
@@ -50,6 +53,8 @@ class Decision(str, Enum):
     ANSWERED_HELP = "answered:help"
     ANSWERED_RESET = "answered:reset"
     ANSWERED_FORGET = "answered:forget"
+    ANSWERED_ROLL = "answered:roll"
+    ANSWERED_MAGIC8 = "answered:magic8"
     PERSONA_SWITCHED = "persona-switched"
     APOLOGY = "apology"
     DROP_LOOP_GUARD = "dropped:loop-guard"
@@ -192,6 +197,15 @@ class BotService:
             self._start_task = None
 
     async def _start(self) -> None:
+        info = getattr(self.mc, "self_info", None)
+        radio_name = info.get("name") if isinstance(info, dict) else None
+        if not isinstance(radio_name, str) or not radio_name:
+            raise ChannelError("radio did not report its node name; cannot verify bot_name")
+        if radio_name != self.cfg.bot_name:
+            raise ChannelError(
+                f"radio node name {radio_name!r} does not match bot_name {self.cfg.bot_name!r}; "
+                "set both to the same name before starting"
+            )
         result = await self.mc.commands.get_channel(self.cfg.channel_idx)
         if result is None or result.type == EventType.ERROR:
             raise ChannelError(
@@ -243,8 +257,13 @@ class BotService:
 
     async def _announce_startup(self) -> None:
         try:
-            name = plain_ascii(self.cfg.bot_name) or "MeshAI"
-            text = f"{name} v{__version__}, LLM: {self.cfg.model}, https://github.com/mhcoen/meshai"
+            name = plain_ascii(self.cfg.bot_name) or "Mesh Potato"
+            text = f"{name} v{__version__}, LLM: {self.cfg.model}, https://github.com/mhcoen/meshpotato"
+            with_help = text + f" Try {self.cfg.trigger_prefix}{self.cfg.command_prefix}help."
+            if (all(" " <= c <= "~" for c in with_help)
+                    and len(with_help) <= self.cfg.reply_max_chars
+                    and len(with_help.encode("utf-8")) <= self._reply_max_bytes):
+                text = with_help
             # Do not rewrite a model identifier or truncate the repository URL.
             if (any(not " " <= c <= "~" for c in text)
                     or len(text) > self.cfg.reply_max_chars
@@ -407,7 +426,8 @@ class BotService:
         command = parse_command(prompt, cfg.command_prefix)
         if command is not None:
             self._check(prompt, "prompt")
-            return await self._handle_command(parsed, path_len, command, received_at)
+            arguments = prompt[len(cfg.command_prefix):].strip().partition(" ")[2]
+            return await self._handle_command(parsed, path_len, command, received_at, arguments)
 
         # 3. Length.
         if len(prompt) > cfg.prompt_max_chars:
@@ -438,7 +458,8 @@ class BotService:
             cfg.transcript_max_chars, cfg.person_memory_max_chars,
         )
         reference = select_references(prompt, self.references)
-        context_verdict = self.gate.check(build_user_message(transcript, prompt, memory_block, reference))
+        reception = reception_context(payload)
+        context_verdict = self.gate.check(build_user_message(transcript, prompt, memory_block, reference, reception))
         if context_verdict.blocked:
             self.stats.injection_blocks += 1
             return self._record(
@@ -464,13 +485,13 @@ class BotService:
             entries, self.memory.rounds_for(parsed.sender) if state.remember else [],
             parsed.sender, cfg.bot_name, cfg.transcript_max_chars, cfg.person_memory_max_chars,
         )
-        self._check(build_user_message(transcript, prompt, memory_block, reference), "context")
+        self._check(build_user_message(transcript, prompt, memory_block, reference, reception), "context")
         # Models overshoot a stated character budget by 10 to 20 percent, so state 80 percent of
         # the real room; the hard cap in compose_reply still enforces the true limit.
         budget = max(1, int(available * 0.8))
         messages = build_messages(
             cfg.bot_name, budget, transcript, prompt, cfg.personas[self.active_persona], self.facts, memory_block,
-            reference,
+            reference, reception,
         )
 
         # Model, under a hard timeout per call. A reply that does not fit goes back to the
@@ -694,7 +715,7 @@ class BotService:
                 return "rate-limited"
 
     async def _post_generated(self, prefix: str, request: str, fallback: str, what: str) -> str:
-        """Generate an unsolicited post in the active voice and transmit it.
+        """Generate a post; fortunes always use the built-in funny voice.
 
         Same path as a reply: injection checks, limiter reservation, the
         shortening retries, the fixed fallback if it still does not fit, the injection
@@ -706,11 +727,14 @@ class BotService:
         self._check(request, "context")
         if not self._admit(cfg.bot_name).allowed:
             return "rate-limited"
-        available = cfg.reply_max_chars - len(prefix)
+        suffix = cfg.fortune_help_hint if what == "fortune" else ""
+        available = min(cfg.reply_max_chars - len(prefix) - len(suffix),
+                        self._reply_max_bytes - len((prefix + suffix).encode("utf-8")))
         if available <= 0:
             return "no-room"
         budget = max(1, int(available * 0.8))
-        messages = build_messages(cfg.bot_name, budget, "", request, cfg.personas[self.active_persona], self.facts)
+        persona = BUILTIN_PERSONAS["funny"] if what == "fortune" else cfg.personas[self.active_persona]
+        messages = build_messages(cfg.bot_name, budget, "", request, persona, self.facts)
         try:
             shaped, retries, latency_ms, truncated = await self._generate_fitting(messages, available)
         except InjectionBlocked:
@@ -734,7 +758,7 @@ class BotService:
             self.stats.injection_blocks += 1
             self.log.emit("injection_block", point=what, score=verdict.score, rules=list(verdict.rules), error=verdict.error)
             return "blocked"
-        text = prefix + shaped
+        text = prefix + shaped + suffix
         if len(text) > cfg.reply_max_chars:
             return "no-room"
         if not await self._send(text):
@@ -745,7 +769,7 @@ class BotService:
 
     # ------------------------------------------------------------------ personalities
 
-    async def _handle_command(self, parsed, path_len, command: str, received_at: float) -> Decision:
+    async def _handle_command(self, parsed, path_len, command: str, received_at: float, arguments: str = "") -> Decision:
         cfg = self.cfg
         if command in cfg.personas:
             self._switch_persona(command)
@@ -754,6 +778,18 @@ class BotService:
             self._switch_persona(cfg.default_persona)
             text = cfg.persona_reset_message
             decision = Decision.ANSWERED_RESET
+        elif command == ROLL_COMMAND:
+            try:
+                count, sides = parse_dice(arguments)
+            except ValueError:
+                text = f"Use {cfg.command_prefix}roll 3 8 or {cfg.command_prefix}roll 3,8; 1-20 dice, 1-1000 sides."
+            else:
+                values = ", ".join(str(random.randint(1, sides)) for _ in range(count))
+                text = f"Rolled {values}."
+            decision = Decision.ANSWERED_ROLL
+        elif command == MAGIC8_COMMAND:
+            text = random.choice(MAGIC8_ANSWERS)
+            decision = Decision.ANSWERED_MAGIC8
         elif command == FORGET_COMMAND:
             for state in self._requests.values():
                 if state.sender == parsed.sender:
@@ -764,8 +800,7 @@ class BotService:
             text = "Forgotten." if had else "I had nothing on you."
             decision = Decision.ANSWERED_FORGET
         else:
-            text = cfg.help_message  # help, or anything unrecognised
-            decision = Decision.ANSWERED_HELP
+            return await self._send_help(parsed, path_len, command, received_at)
         reply = compose_reply(parsed.sender, text, cfg.reply_max_chars, max_bytes=self._reply_max_bytes)
         if reply is None:
             return self._record(parsed, path_len, Decision.DROP_EMPTY, command=command)
@@ -778,6 +813,44 @@ class BotService:
             self.stats.replies_sent += 1
             return self._record(parsed, path_len, decision, reply=reply, held_ms=held_ms, command=command)
         return self._record(parsed, path_len, Decision.DROP_SEND_FAILED, reply=reply, command=command)
+
+    async def _send_help(self, parsed, path_len, command: str, received_at: float) -> Decision:
+        # Fit and gate both pages before reserving even the first token.
+        replies = self.cfg.help_pages  # public help, with no sender mention
+        if any(len(reply) > self.cfg.reply_max_chars or len(reply.encode("utf-8")) > self._reply_max_bytes
+               for reply in replies):
+            return self._record(parsed, path_len, Decision.DROP_EMPTY, command=command)
+        for reply in replies:
+            self._check(reply, "reply")
+        limit = await self._wait_for_admission(parsed.sender, received_at)
+        if not limit.allowed:
+            return self._queue_drop(parsed, path_len, limit.reason, command=command)
+        await self._hold_for_quiet_channel(received_at)
+        for index, reply in enumerate(replies):
+            if index:
+                # Keep ownership of this admitted request so another handler cannot
+                # interleave a reply. Page one committed its token; page two needs
+                # a fresh global AND sender reservation. Do not rejoin our own FIFO.
+                state = self._requests[asyncio.current_task()]
+                deadline = self._clock() + self.cfg.queue_wait_s
+                while True:
+                    if self._stopped:
+                        raise asyncio.CancelledError()
+                    self._check(reply, "reply")
+                    if self._clock() >= deadline:
+                        self.stats.queue_expired += 1
+                        return self._queue_drop(parsed, path_len, "queue-expired",
+                                                command=command, pages_sent=index)
+                    state.reservation = self.limiter.reserve(parsed.sender)
+                    if state.reservation.allowed:
+                        break
+                    await asyncio.sleep(min(self.queue_tick_s, deadline - self._clock()))
+            if not await self._send(reply):
+                return self._record(parsed, path_len, Decision.DROP_SEND_FAILED,
+                                    command=command, pages_sent=index, reply=reply)
+            self.stats.replies_sent += 1
+        return self._record(parsed, path_len, Decision.ANSWERED_HELP,
+                            command=command, pages_sent=len(replies), reply=" | ".join(replies))
 
     def _switch_persona(self, name: str) -> None:
         """Activate a preset. The default carries no timer; anything else reverts after the timeout."""
